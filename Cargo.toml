@@ -1,8 +1,8 @@
 [package]
-name = "nock"
+name = "vey"
 version = "0.13.0"
 edition = "2021"
-description = "A tiny native notch and top bar for Windows, written in Rust"
+description = "Vey - a tiny native notch and top bar for Windows, written in Rust"
 
 [features]
 default = ["media"]

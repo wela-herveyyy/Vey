@@ -1,4 +1,4 @@
-//! Tiny plain-text persistence in %APPDATA%\Nock. No serde, no TOML crate.
+//! Tiny plain-text persistence in %APPDATA%\Vey. No serde, no TOML crate.
 //!   config.ini  – a few switches
 //!   apps.txt    – pinned launcher entries, one per line:  Name|target|optional args
 //!   todos.txt   – the to-do list, one per line:           0|text   (1 = done)
@@ -14,10 +14,10 @@ pub fn data_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
     let base = base.unwrap_or_else(|| PathBuf::from("."));
-    let d = base.join("Nock");
+    let d = base.join("Vey");
     // Settings from earlier working names are carried over once.
     if !d.exists() {
-        for old in ["Islet", "Notch"] {
+        for old in ["Nock", "Islet", "Notch"] {
             let o = base.join(old);
             if o.exists() {
                 let _ = fs::rename(&o, &d);
@@ -167,7 +167,7 @@ pub struct Config {
     pub erp_url: String,
     /// ERPNext API token (`api_key:api_secret`, `token ...`, `Basic ...`, or `Bearer ...`).
     pub erp_token: String,
-    /// A Start Menu shortcut so Windows search finds Nock.
+    /// A Start Menu shortcut so Windows search finds Vey.
     pub start_menu: bool,
     /// Hide the notch and bar while a full-screen app or game is in front.
     pub fs_hide: bool,
@@ -182,7 +182,7 @@ pub struct Config {
 }
 
 const DEFAULT_CONFIG: &str = "\
-# Nock settings (1 = on, 0 = off)
+# Vey settings (1 = on, 0 = off)
 hover_expand=0
 eq_animation=1
 clock_24h=0
@@ -204,7 +204,7 @@ water_min=0
 auto_break=0
 # minutes between look-away reminders for your eyes (0 = off)
 eye_min=0
-# a Start Menu shortcut so typing Nock in Windows search finds it: 1 = on
+# a Start Menu shortcut so typing Vey in Windows search finds it: 1 = on
 start_menu=1
 # hide the notch and bar while a full-screen app or game is in front: 1 = on
 fs_hide=1
@@ -363,7 +363,7 @@ pub fn load_config() -> Config {
 pub fn save_config(c: &Config) {
     let b = |v: bool| if v { 1 } else { 0 };
     let text = format!(
-        "# Nock settings (1 = on, 0 = off)\nhover_expand={}\neq_animation={}\nclock_24h={}\nreserve_space={}\ntop_bar={}\n# buddy: 0 = off, 2 = cat, 5 = robot, 6 = ronin, 7 = courier, 8 = necromancer (1, 3 and 4 were retired and now give the robot)\nbuddy={}\n# fight scenes now and then (needs a buddy): 1 = on\nscenes={}\n# average minutes between scenes (1 to 60)\nscene_min={}\n# CPU and memory read-out on the top bar: 1 = on\nstats={}\n# top bar clock: 0 = digital, 1 = analog, 2 = binary, 3 = countdown to Friday\nclock_style={}\n# minutes between water reminders (0 = off)\nwater_min={}\n# after a focus session start a 5 minute break, then focus again: 1 = on\nauto_break={}\n# minutes between look-away reminders for your eyes (0 = off)\neye_min={}\n# a Start Menu shortcut so typing Nock in Windows search finds it: 1 = on\nstart_menu={}\n# hide the notch and bar while a full-screen app or game is in front: 1 = on\nfs_hide={}\n# keep the notch and bar hidden until the pointer touches the top edge: 1 = on\nauto_hide={}\n# fade the notch out while a window covers it, and back in when the window moves away: 1 = on\nsmart_hide={}\n# close the open panel when the pointer leaves it or another window comes to the front: 1 = on\nauto_close={}\n# smart notch hints (low battery, take a break after 90 min at the PC, link/code copied): 1 = on\nsmart={}\n# calendar link (Google: Settings > your calendar > Secret address in iCal format) for meeting hints; empty = off\ncalendar_url={}\n# a short chime with meeting, low battery and break hints: 1 = on\nsmart_sound={}\n# display for the notch and bar: 0 = primary, 2 = second display, and so on\nmonitor={}\n# extra beside the idle clock: 0 = off, 1 = tasks left, 2 = focus minutes today, 3 = CPU and RAM, 4 = next meeting\nidle_glance={}\n# progress line on the notch while a focus session runs: 1 = on\nidle_focus_bar={}\n# next meeting glance (idle_glance=4) shows meetings starting within this many hours (1 to 12)\nidle_meeting_hours={}\n# thin line along the bottom of the idle notch: how much of your workday has passed: 1 = on\nday_line={}\n# workday for the day line, in hours (0 to 24)\nday_start={}\nday_end={}\n# scroll up over the idle notch cycles time, date, tasks left and focus today: 1 = on\nidle_cycle={}\n# a state glyph on the notch: dot, ring (mic in use), amber square (battery low), arc (focus session): 1 = on\nstate_dot={}\n# now and then the buddy peeks over the bottom edge of the notch (robot and kitty): 1 = on\npeek={}\n# ERPNext / Frappe server URL and API token (api_key:api_secret) for the Work tab\nerp_url={}\nerp_token={}\n",
+        "# Vey settings (1 = on, 0 = off)\nhover_expand={}\neq_animation={}\nclock_24h={}\nreserve_space={}\ntop_bar={}\n# buddy: 0 = off, 2 = cat, 5 = robot, 6 = ronin, 7 = courier, 8 = necromancer (1, 3 and 4 were retired and now give the robot)\nbuddy={}\n# fight scenes now and then (needs a buddy): 1 = on\nscenes={}\n# average minutes between scenes (1 to 60)\nscene_min={}\n# CPU and memory read-out on the top bar: 1 = on\nstats={}\n# top bar clock: 0 = digital, 1 = analog, 2 = binary, 3 = countdown to Friday\nclock_style={}\n# minutes between water reminders (0 = off)\nwater_min={}\n# after a focus session start a 5 minute break, then focus again: 1 = on\nauto_break={}\n# minutes between look-away reminders for your eyes (0 = off)\neye_min={}\n# a Start Menu shortcut so typing Vey in Windows search finds it: 1 = on\nstart_menu={}\n# hide the notch and bar while a full-screen app or game is in front: 1 = on\nfs_hide={}\n# keep the notch and bar hidden until the pointer touches the top edge: 1 = on\nauto_hide={}\n# fade the notch out while a window covers it, and back in when the window moves away: 1 = on\nsmart_hide={}\n# close the open panel when the pointer leaves it or another window comes to the front: 1 = on\nauto_close={}\n# smart notch hints (low battery, take a break after 90 min at the PC, link/code copied): 1 = on\nsmart={}\n# calendar link (Google: Settings > your calendar > Secret address in iCal format) for meeting hints; empty = off\ncalendar_url={}\n# a short chime with meeting, low battery and break hints: 1 = on\nsmart_sound={}\n# display for the notch and bar: 0 = primary, 2 = second display, and so on\nmonitor={}\n# extra beside the idle clock: 0 = off, 1 = tasks left, 2 = focus minutes today, 3 = CPU and RAM, 4 = next meeting\nidle_glance={}\n# progress line on the notch while a focus session runs: 1 = on\nidle_focus_bar={}\n# next meeting glance (idle_glance=4) shows meetings starting within this many hours (1 to 12)\nidle_meeting_hours={}\n# thin line along the bottom of the idle notch: how much of your workday has passed: 1 = on\nday_line={}\n# workday for the day line, in hours (0 to 24)\nday_start={}\nday_end={}\n# scroll up over the idle notch cycles time, date, tasks left and focus today: 1 = on\nidle_cycle={}\n# a state glyph on the notch: dot, ring (mic in use), amber square (battery low), arc (focus session): 1 = on\nstate_dot={}\n# now and then the buddy peeks over the bottom edge of the notch (robot and kitty): 1 = on\npeek={}\n# ERPNext / Frappe server URL and API token (api_key:api_secret) for the Work tab\nerp_url={}\nerp_token={}\n",
         b(c.hover_expand),
         b(c.eq_animation),
         b(c.clock_24h),

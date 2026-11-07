@@ -44,7 +44,7 @@ fn main() -> Result<()> {
     let _ = std::env::set_current_dir(store::data_dir());
     unsafe {
         // one instance only
-        let _single = CreateMutexW(None, true, w!("Local\\NockSingleInstance"))?;
+        let _single = CreateMutexW(None, true, w!("Local\\VeySingleInstance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             return Ok(());
         }
@@ -56,7 +56,7 @@ fn main() -> Result<()> {
         windows::Win32::System::Ole::OleInitialize(None)?;
 
         let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
-        let class = w!("NockWindow");
+        let class = w!("VeyWindow");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(wndproc),
             hInstance: hinst,
@@ -217,22 +217,22 @@ fn main() -> Result<()> {
 fn on_update(hwnd: HWND, code: usize) {
     let cur = env!("CARGO_PKG_VERSION");
     let latest = sys::LATEST.lock().unwrap().clone();
-    let show = |text: &str, flags: MESSAGEBOX_STYLE| unsafe { MessageBoxW(Some(hwnd), &HSTRING::from(text), w!("Nock"), flags | MB_SETFOREGROUND) };
+    let show = |text: &str, flags: MESSAGEBOX_STYLE| unsafe { MessageBoxW(Some(hwnd), &HSTRING::from(text), w!("Vey"), flags | MB_SETFOREGROUND) };
     match code {
         0 => {
             show("Couldn't check for updates. Are you online?", MB_OK | MB_ICONINFORMATION);
         }
         1 => {
-            show(&format!("Nock {cur} is the latest version."), MB_OK | MB_ICONINFORMATION);
+            show(&format!("Vey {cur} is the latest version."), MB_OK | MB_ICONINFORMATION);
         }
         _ if sys::installed_by_setup() => {
-            let q = format!("Nock {} is available (you have {cur}).\n\nUpdate now? Nock restarts by itself in a few seconds.", latest.trim_start_matches('v'));
+            let q = format!("Vey {} is available (you have {cur}).\n\nUpdate now? Vey restarts by itself in a few seconds.", latest.trim_start_matches('v'));
             if show(&q, MB_YESNO | MB_ICONQUESTION) == IDYES {
                 sys::install_update(&latest);
             }
         }
         _ => {
-            let q = format!("Nock {} is available (you have {cur}).\n\nYes: update now (Nock downloads it and restarts).\nNo: open the download page instead.", latest.trim_start_matches('v'));
+            let q = format!("Vey {} is available (you have {cur}).\n\nYes: update now (Vey downloads it and restarts).\nNo: open the download page instead.", latest.trim_start_matches('v'));
             match show(&q, MB_YESNOCANCEL | MB_ICONQUESTION) {
                 IDYES => sys::update_portable(&latest),
                 IDNO => sys::open_releases(),
@@ -335,6 +335,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         m if m == sys::WM_MIC => a.update_call(),
         m if m == sys::WM_BRIGHT => a.on_brightness(wp.0 != 0, lp.0 as u32),
         m if m == work::WM_WORK => a.on_work(),
+        m if m == craft::WM_CRAFT => a.on_craft(),
         _ => return DefWindowProcW(hwnd, msg, wp, lp),
     }
     LRESULT(0)
@@ -365,7 +366,7 @@ fn add_tray(hwnd: HWND) {
             hIcon: app_icon(),
             ..Default::default()
         };
-        let tip: Vec<u16> = "Nock".encode_utf16().collect();
+        let tip: Vec<u16> = "Vey".encode_utf16().collect();
         nid.szTip[..tip.len()].copy_from_slice(&tip);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }
@@ -611,6 +612,7 @@ mod tests {
             ("mic", sys::WM_MIC),
             ("frame", app::WM_FRAME),
             ("work", work::WM_WORK),
+            ("craft", craft::WM_CRAFT),
         ];
         for (i, (na, a)) in all.iter().enumerate() {
             for (nb, b) in &all[i + 1..] {

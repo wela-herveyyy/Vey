@@ -4,3 +4,5 @@ Cargo.lock.bak
 installer/Output/
 packaging/linux/out/
 erp.local.ini
+output/
+graphify-out/

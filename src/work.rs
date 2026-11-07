@@ -582,7 +582,7 @@ mod http {
 
     impl Client {
         pub fn new() -> Self {
-            let agent = wide("Nock/0.13");
+            let agent = wide("Vey/0.13");
             let mut s = unsafe {
                 WinHttpOpen(
                     agent.as_ptr(),

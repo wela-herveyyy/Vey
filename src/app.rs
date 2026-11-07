@@ -19,6 +19,7 @@ use crate::radio::{self, Kind, Radios, Req};
 use crate::store::{self, AppEntry, Config, Todo};
 use crate::sys;
 use crate::work;
+use crate::craft;
 
 // ------------------------------------------------------------------ layout
 
@@ -34,7 +35,22 @@ pub const MAX_TODO: usize = 5;
 pub const SHELF_MAX: usize = 12;
 
 /// Rows the app picker shows at once.
-pub const PICK_ROWS: usize = 5;
+pub const PICK_ROWS: usize = 4;
+pub const APP_TILE_ROWS: usize = 3;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AppsFilter {
+    All,
+    Craft,
+    Pinned,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AppsItem {
+    Craft(usize),
+    Pinned(usize),
+    AddApp,
+}
 
 /// Settings pages the Controls tab links to (display, sound, network, power, all settings).
 pub const SETTINGS_PAGES: [&str; 5] = [
@@ -223,6 +239,11 @@ pub enum Act {
     WorkCloseDrop,
     WorkOpenBrowser,
     WorkOpenComments,
+    AppsFilterSet(AppsFilter),
+    CraftClick(usize),
+    CraftWeb(usize),
+    CraftSite,
+    CraftRefresh,
 }
 
 #[derive(Clone, Copy)]
@@ -489,6 +510,13 @@ pub struct App {
     pub work_drop_query: String,
     pub work_drop_scroll: usize,
     pub work_drop_sel: usize,
+    // craft suite (ArtCraft / Storytold)
+    pub craft: craft::Handle,
+    pub craft_states: [craft::State; craft::CRAFT_COUNT],
+    pub craft_icons: [Option<ID2D1Bitmap>; craft::CRAFT_COUNT],
+    pub craft_toast: Option<(String, bool, Instant)>,
+    pub apps_filter: AppsFilter,
+    pub apps_scroll: usize,
 }
 
 enum AlertAct {
@@ -503,6 +531,8 @@ impl App {
         let max_w = ((EXP_W + MARGIN) * scale).ceil() as i32 + 2;
         let max_h = ((EXP_H + MARGIN) * scale).ceil() as i32 + 2;
         let gfx = Gfx::new(max_w, max_h, scale)?;
+        let craft = craft::start(hwnd.0 as isize);
+        let craft_states = craft.data.lock().unwrap().states.clone();
         let mut a = App {
             hwnd,
             gfx,
@@ -654,11 +684,18 @@ impl App {
             work_drop_query: String::new(),
             work_drop_scroll: 0,
             work_drop_sel: 0,
+            craft,
+            craft_states,
+            craft_icons: Default::default(),
+            craft_toast: None,
+            apps_filter: AppsFilter::All,
+            apps_scroll: 0,
         };
         a.update_monitor();
         sys::watch_mic(hwnd.0 as isize);
         sys::watch_mic_sessions(hwnd.0 as isize);
         a.load_app_icons();
+        a.load_craft_icons();
         a.load_shelf_icons();
         if !hwnd.0.is_null() && !a.cfg.erp_url.is_empty() && !a.cfg.erp_token.is_empty() {
             a.refresh_work(false);
@@ -711,6 +748,7 @@ impl App {
             self.scale = scale;
             self.load_art();
             self.load_app_icons();
+            self.load_craft_icons();
             self.load_shelf_icons();
         }
         self.update_reserve();
@@ -1007,7 +1045,7 @@ impl App {
             match self.page {
                 Page::Game if self.hub.is_playing() => 16,
                 Page::Stats => 1000,
-                Page::Apps if self.picking && (self.app_list.is_none() || self.app_loading) => 33,
+                Page::Apps if (self.picking && (self.app_list.is_none() || self.app_loading)) || self.craft_busy() => 33,
                 Page::Work if self.work_loading || self.work_searching || self.work_saving => 33,
                 _ => 0,
             }
@@ -1244,6 +1282,8 @@ impl App {
         if on {
             if self.page == Page::Controls {
                 self.refresh_controls();
+            } else if self.page == Page::Apps {
+                let _ = self.craft.tx.send(craft::Req::Scan);
             } else if self.page == Page::Work
                 && !self.work_loading
                 && self.work_last_sync.map_or(true, |t| t.elapsed().as_secs() > 120)
@@ -1769,6 +1809,15 @@ impl App {
             let i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
             let n = (i + if delta < 0 { 1 } else { -1 }).clamp(0, PAGES.len() as i32 - 1);
             self.select_page(PAGES[n as usize]);
+        } else if self.page == Page::Apps && !self.picking {
+            let total_rows = self.apps_items().len().div_ceil(2);
+            let max = total_rows.saturating_sub(APP_TILE_ROWS);
+            self.apps_scroll = if delta < 0 {
+                (self.apps_scroll + 1).min(max)
+            } else {
+                self.apps_scroll.saturating_sub(1)
+            };
+            self.render();
         } else if self.page == Page::Apps && self.picking {
             let max = self.app_view().len().saturating_sub(PICK_ROWS);
             self.app_scroll = if delta < 0 { (self.app_scroll + 1).min(max) } else { self.app_scroll.saturating_sub(1) };
@@ -1823,6 +1872,8 @@ impl App {
         if p != Page::Apps {
             self.picking = false;
             self.app_filter.clear();
+        } else {
+            let _ = self.craft.tx.send(craft::Req::Scan);
         }
         self.sync_timers();
         if self.page_t < 1.0 {
@@ -2038,6 +2089,7 @@ impl App {
                         self.apps.push(store::AppEntry { name, target, args: String::new() });
                         store::save_apps(&self.apps);
                         self.load_app_icons();
+                    self.clamp_apps_scroll();
                     }
                 }
             }
@@ -2046,6 +2098,7 @@ impl App {
                     self.apps.remove(i);
                     store::save_apps(&self.apps);
                     self.load_app_icons();
+                    self.clamp_apps_scroll();
                 }
             }
             Act::ShelfItem(i) => self.shelf_open(i),
@@ -2130,6 +2183,49 @@ impl App {
                 self.work_drop = None;
                 self.work_drop_query.clear();
                 self.finish_entry(false, true);
+            }
+            Act::AppsFilterSet(f) => {
+                self.apps_filter = f;
+                self.apps_scroll = 0;
+            }
+            Act::CraftClick(i) => {
+                if i < craft::CRAFT_COUNT {
+                    match &self.craft_states[i] {
+                        craft::State::Installed { exe, .. } => {
+                            let target = exe.clone();
+                            sys::open(&target, "");
+                            self.pinned = false;
+                            self.set_expanded(false);
+                        }
+                        craft::State::NotInstalled | craft::State::Failed(_) => {
+                            self.craft_states[i] = craft::State::Installing {
+                                step: "Starting download\u{2026}".into(),
+                                pct: None,
+                            };
+                            self.spin_t = 0.0;
+                            let _ = self.craft.tx.send(craft::Req::Install(i));
+                            self.sync_timers();
+                        }
+                        craft::State::Installing { .. } => {}
+                    }
+                }
+            }
+            Act::CraftWeb(i) => {
+                if let Some(spec) = craft::SPECS.get(i) {
+                    sys::open(spec.web_url, "");
+                    self.pinned = false;
+                    self.set_expanded(false);
+                }
+            }
+            Act::CraftSite => {
+                sys::open("https://getartcraft.com", "");
+                self.pinned = false;
+                self.set_expanded(false);
+            }
+            Act::CraftRefresh => {
+                let _ = self.craft.tx.send(craft::Req::Scan);
+                self.load_app_icons();
+                self.load_craft_icons();
             }
             Act::WorkOpenBrowser | Act::WorkOpenComments => {
                 if let Some(item) = self.work_current() {
@@ -2527,6 +2623,78 @@ impl App {
         self.sync_timers();
         if !self.hidden {
             self.render();
+        }
+    }
+
+    pub fn on_craft(&mut self) {
+        let toast = {
+            let mut d = self.craft.data.lock().unwrap();
+            self.craft_states = d.states.clone();
+            d.toast.take()
+        };
+        self.load_craft_icons();
+        if let Some((msg, ok)) = toast {
+            if ok {
+                self.buddy_say(&msg, 4500);
+                if !self.expanded {
+                    self.pill_alert("App installed", 5);
+                }
+            }
+            self.craft_toast = Some((msg, ok, Instant::now()));
+        }
+        self.sync_timers();
+        if !self.hidden {
+            self.render();
+        }
+    }
+
+    pub fn craft_busy(&self) -> bool {
+        self.craft_states
+            .iter()
+            .any(|s| matches!(s, craft::State::Installing { .. }))
+    }
+
+    pub fn load_craft_icons(&mut self) {
+        for i in 0..craft::CRAFT_COUNT {
+            let bmp = match &self.craft_states[i] {
+                craft::State::Installed { exe, .. } => {
+                    sys::file_icon(std::path::Path::new(exe)).and_then(|icon| {
+                        let b = self.gfx.bitmap_from_hicon(icon).ok();
+                        unsafe {
+                            let _ = DestroyIcon(icon);
+                        }
+                        b
+                    })
+                }
+                _ => None,
+            };
+            self.craft_icons[i] = bmp;
+        }
+    }
+
+    pub fn apps_items(&self) -> Vec<AppsItem> {
+        let mut out = Vec::new();
+        if matches!(self.apps_filter, AppsFilter::All | AppsFilter::Craft) {
+            for i in 0..craft::CRAFT_COUNT {
+                out.push(AppsItem::Craft(i));
+            }
+        }
+        if matches!(self.apps_filter, AppsFilter::All | AppsFilter::Pinned) {
+            for i in 0..self.apps.len().min(12) {
+                out.push(AppsItem::Pinned(i));
+            }
+            if self.apps.len() < 12 {
+                out.push(AppsItem::AddApp);
+            }
+        }
+        out
+    }
+
+    pub fn clamp_apps_scroll(&mut self) {
+        let total_rows = self.apps_items().len().div_ceil(2);
+        let max = total_rows.saturating_sub(APP_TILE_ROWS);
+        if self.apps_scroll > max {
+            self.apps_scroll = max;
         }
     }
 
@@ -4308,6 +4476,87 @@ mod glance_tests {
         save_png(&mut a, "work_status_drop");
         assert_eq!(a.work_drop_options_for(WorkDrop::Status).len(), 1);
         assert_eq!(a.hit_at(400.0, CONTENT_Y + 140.0), Some(Act::WorkPickOption(0)));
+    }
+
+    #[test]
+    fn apps_craft_ui_hit_targets_and_snapshots() {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let scale = 2.0f32;
+        let mut a = App::new(HWND::default(), scale).expect("app");
+        a.expanded = true;
+        a.sw = Spring::new(EXP_W);
+        a.sh = Spring::new(EXP_H);
+        a.page = Page::Apps;
+        a.snap_tab();
+
+        let save_png = |a: &mut App, tag: &str| {
+            let (pw, ph) = ((EXP_W * scale) as i32, (EXP_H * scale) as i32);
+            a.gfx.begin(pw, ph).unwrap();
+            let mut hits = Vec::new();
+            crate::ui::draw(a, EXP_W, EXP_H, &mut hits);
+            let _ = a.gfx.end();
+            a.hits = hits;
+            if let Ok(dir) = std::env::var("WORK_PREVIEW_DIR") {
+                let (bw, _bh, buf) = a.gfx.snapshot();
+                let png = encode_bgra_png(pw as u32, ph as u32, bw as usize, &buf);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(format!("{dir}/{tag}.png"), png).unwrap();
+            }
+        };
+
+        // 1. Default All view (Craft apps + Pinned apps in 2-col Controls grid)
+        save_png(&mut a, "apps_all");
+        assert!(a.hits.iter().any(|h| h.act == Act::AppsFilterSet(AppsFilter::All)));
+        assert!(a.hits.iter().any(|h| h.act == Act::AppsFilterSet(AppsFilter::Craft)));
+        assert!(a.hits.iter().any(|h| h.act == Act::AppsFilterSet(AppsFilter::Pinned)));
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(0)));
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(1)));
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(2)));
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(3)));
+
+        // 2. Craft filter view showcasing Ready, Downloading (64%), NotInstalled (Get), and Versioned states
+        a.apps_filter = AppsFilter::Craft;
+        a.spin_t = 0.45;
+        a.craft_states = [
+            craft::State::Installed {
+                exe: r"C:\Program Files\ArtCraft Launcher\artcraft-launcher.exe".into(),
+                version: Some("v0.16.0".into()),
+            },
+            craft::State::Installing {
+                step: "Downloading v0.17.0".into(),
+                pct: Some(64),
+            },
+            craft::State::NotInstalled,
+            craft::State::Installed {
+                exe: r"C:\Program Files\WordCraft\wordcraft.exe".into(),
+                version: Some("v0.16.0".into()),
+            },
+        ];
+        // Clear icons on uninstalled / downloading slots so fallback glyphs are also exercised
+        a.craft_icons[1] = None;
+        a.craft_icons[2] = None;
+        save_png(&mut a, "apps_craft_states");
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftSite));
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(0)));
+        assert!(!a.hits.iter().any(|h| h.act == Act::CraftClick(1))); // disabled while installing
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(2)));
+        assert!(a.hits.iter().any(|h| h.act == Act::CraftClick(3)));
+
+        // 3. Add App picker in borderless Controls compact rows
+        a.picking = true;
+        a.app_list = Some(vec![
+            ("Calculator".into(), "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into()),
+            ("Craft Launcher".into(), "ArtCraft.Launcher".into()),
+            ("Notepad".into(), "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App".into()),
+            ("Windows Terminal".into(), "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into()),
+            ("WordCraft".into(), "Storytold.WordCraft".into()),
+        ]);
+        save_png(&mut a, "apps_picker");
+        assert!(a.hits.iter().any(|h| h.act == Act::AppDone));
+        assert!(a.hits.iter().any(|h| h.act == Act::AppPick(0)));
     }
 
     fn encode_bgra_png(w: u32, h: u32, stride_px: usize, bgra: &[u8]) -> Vec<u8> {

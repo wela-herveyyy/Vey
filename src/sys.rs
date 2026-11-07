@@ -919,7 +919,7 @@ pub fn wifi_join_new_async(hwnd: isize, ssid: String, auth: String, key: Option<
     wifi_post(hwnd);
     std::thread::spawn(move || {
         let xml = wifi_profile_xml(&ssid, &auth, key.as_deref());
-        let path = std::env::temp_dir().join(format!("nock-wlan-{}.xml", std::process::id()));
+        let path = std::env::temp_dir().join(format!("vey-wlan-{}.xml", std::process::id()));
         let wrote = std::fs::write(&path, xml).is_ok();
         let mut ok = false;
         if wrote {
@@ -1197,7 +1197,7 @@ pub fn autostart_enabled() -> bool {
         RegGetValueW(
             HKEY_CURRENT_USER,
             w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-            w!("Nock"),
+            w!("Vey"),
             RRF_RT_REG_SZ,
             None,
             None,
@@ -1216,13 +1216,14 @@ pub fn set_autostart(on: bool) {
                 let _ = RegSetKeyValueW(
                     HKEY_CURRENT_USER,
                     key,
-                    w!("Nock"),
+                    w!("Vey"),
                     REG_SZ.0,
                     Some(w.as_ptr() as *const _),
                     (w.len() * 2) as u32,
                 );
             }
         } else {
+            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, key, w!("Vey"));
             let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, key, w!("Nock"));
         }
     }
@@ -1675,7 +1676,7 @@ pub fn shell_icon(parse_name: &str) -> Option<HICON> {
 /// Where the Start Menu shortcut lives (per user, so no admin rights are needed).
 fn start_menu_link() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("APPDATA")?;
-    Some(std::path::PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs\Nock.lnk"))
+    Some(std::path::PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs\Vey.lnk"))
 }
 
 /// Add (or remove) a Start Menu shortcut so typing "Nock" in Windows search finds it. A
@@ -1697,7 +1698,7 @@ pub fn sync_start_menu(on: bool) {
         if let Some(dir) = exe.parent() {
             let _ = link.SetWorkingDirectory(&HSTRING::from(dir.as_os_str().to_string_lossy().as_ref()));
         }
-        let _ = link.SetDescription(w!("Nock - a notch and top bar for Windows"));
+        let _ = link.SetDescription(w!("Vey - a notch and top bar for Windows"));
         let _ = link.SetIconLocation(&HSTRING::from(exe.as_os_str().to_string_lossy().as_ref()), 0);
         if let Ok(file) = link.cast::<IPersistFile>() {
             let _ = file.Save(&HSTRING::from(lnk.as_os_str().to_string_lossy().as_ref()), true);
@@ -1726,7 +1727,7 @@ mod start_menu_tests {
 // ------------------------------------------------------------------ updates ----
 
 pub const WM_UPDATE: u32 = 0x8000 + 10; // WM_APP + 10
-const REPO: &str = "Akhilesh-Varute/Nock";
+const REPO: &str = "wela-herveyyy/Vey";
 
 /// Newest release tag found by `check_update` (e.g. "v0.9.1").
 pub static LATEST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
@@ -1742,7 +1743,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 pub fn check_update(hwnd: isize) {
     std::thread::spawn(move || {
         let cmd = format!(
-            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (Invoke-RestMethod -UseBasicParsing -Headers @{{'User-Agent'='Nock'}} -Uri 'https://api.github.com/repos/{REPO}/releases/latest').tag_name"
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (Invoke-RestMethod -UseBasicParsing -Headers @{{'User-Agent'='Vey'}} -Uri 'https://api.github.com/repos/{REPO}/releases/latest').tag_name"
         );
         let tag = powershell(&cmd).unwrap_or_default().trim().to_string();
         let code = if !tag.starts_with('v') {
@@ -1772,7 +1773,7 @@ pub fn installed_by_setup() -> bool {
 /// Is `exe` inside `<local app data>\Programs\Nock`? Ignores letter case, slash style and a `\\?\` prefix.
 fn is_install_path(exe: &str, local: &str) -> bool {
     let norm = |s: &str| s.trim_start_matches(r"\\?\").replace('/', "\\").to_lowercase();
-    let dir = format!("{}\\programs\\nock\\", norm(local).trim_end_matches('\\'));
+    let dir = format!("{}\\programs\\vey\\", norm(local).trim_end_matches('\\'));
     norm(exe).starts_with(&dir)
 }
 
@@ -1785,8 +1786,8 @@ pub fn install_update(tag: &str) {
         let ver = tag.trim_start_matches('v');
         let cmd = format!(
             "$ErrorActionPreference='Stop'; try {{ [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-             $f = Join-Path $env:TEMP 'NockSetup-update.exe'; \
-             Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/{REPO}/releases/download/{tag}/NockSetup-{ver}.exe' -OutFile $f; \
+             $f = Join-Path $env:TEMP 'VeySetup-update.exe'; \
+             Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/{REPO}/releases/download/{tag}/VeySetup-{ver}.exe' -OutFile $f; \
              Start-Process -FilePath $f -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait }} catch {{}}; \
              Start-Process -FilePath '{exe}'"
         );
@@ -1806,8 +1807,8 @@ pub fn update_portable(tag: &str) {
         let ver = tag.trim_start_matches('v');
         let cmd = format!(
             "$ErrorActionPreference='Stop'; try {{ [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-             $f = Join-Path $env:TEMP 'Nock-portable-update.exe'; \
-             Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/{REPO}/releases/download/{tag}/Nock-portable-{ver}.exe' -OutFile $f; \
+             $f = Join-Path $env:TEMP 'Vey-portable-update.exe'; \
+             Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/{REPO}/releases/download/{tag}/Vey-portable-{ver}.exe' -OutFile $f; \
              if ((Get-Item $f).Length -lt 100000) {{ throw 'bad download' }} }} catch {{ exit 1 }}; \
              Stop-Process -Id {pid} -Force; Start-Sleep -Seconds 2; \
              try {{ Copy-Item -Force $f '{exe}' }} catch {{ Start-Process 'https://github.com/{REPO}/releases/latest' }}; \
@@ -1829,10 +1830,10 @@ mod update_tests {
     #[test]
     fn install_path_detection() {
         let local = r"C:\Users\akhil\AppData\Local";
-        assert!(is_install_path(r"C:\Users\akhil\AppData\Local\Programs\Nock\nock.exe", local));
-        assert!(is_install_path(r"c:\users\AKHIL\appdata\local\programs\nock\NOCK.EXE", local));
-        assert!(is_install_path(r"\\?\C:\Users\akhil\AppData\Local\Programs\Nock\nock.exe", local));
-        assert!(!is_install_path(r"C:\Users\akhil\AppData\Local\Programs\NockOther\nock.exe", local));
+        assert!(is_install_path(r"C:\Users\akhil\AppData\Local\Programs\Vey\vey.exe", local));
+        assert!(is_install_path(r"c:\users\AKHIL\appdata\local\programs\vey\VEY.EXE", local));
+        assert!(is_install_path(r"\\?\C:\Users\akhil\AppData\Local\Programs\Vey\vey.exe", local));
+        assert!(!is_install_path(r"C:\Users\akhil\AppData\Local\Programs\VeyOther\vey.exe", local));
         assert!(!is_install_path(r"V:\Personal Projects\nock\target\release\nock.exe", local));
     }
 

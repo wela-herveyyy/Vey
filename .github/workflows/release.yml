@@ -16,23 +16,23 @@ jobs:
         run: |
           choco install innosetup --no-progress -y
           $v = "${{ github.ref_name }}".TrimStart('v')
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" installer\nock.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" installer\vey.iss
       - name: Name the no-install version clearly
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart('v')
-          Copy-Item target\release\nock.exe "Nock-portable-$v.exe"
+          Copy-Item target\release\vey.exe "Vey-portable-$v.exe"
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            installer/Output/NockSetup-*.exe
-            Nock-portable-*.exe
+            installer/Output/VeySetup-*.exe
+            Vey-portable-*.exe
           body: |
-            **Most people: download `NockSetup-...exe` (the installer).** It adds Nock to the Start menu, can start with Windows, and updates itself from the tray menu.
+            **Most people: download `VeySetup-...exe` (the installer).** It adds Vey to the Start menu, can start with Windows, and updates itself from the tray menu.
 
-            **Don't want to install? Use `Nock-portable-...exe`.** Put it in a folder you'll keep and run it. No Start menu entry beyond the one Nock adds itself, and it can update itself from the tray menu too.
+            **Don't want to install? Use `Vey-portable-...exe`.** Put it in a folder you'll keep and run it. No Start menu entry beyond the one Vey adds itself, and it can update itself from the tray menu too.
 
-            **Linux (preview): use `nock_...amd64.deb` or `nock-...-x86_64-linux.tar.gz`.** Needs an X11 session (or XWayland) and the DejaVu Sans font. The `.deb` installs with `sudo apt install ./nock_...amd64.deb`; the tarball installs for your user with `./install.sh`. It is a preview, with fewer features and far less testing than the Windows version. See the README for what is missing.
+            **Linux (preview): use `vey_...amd64.deb` or `vey-...-x86_64-linux.tar.gz`.** Needs an X11 session (or XWayland) and the DejaVu Sans font. The `.deb` installs with `sudo apt install ./vey_...amd64.deb`; the tarball installs for your user with `./install.sh`. It is a preview, with fewer features and far less testing than the Windows version. See the README for what is missing.
           generate_release_notes: true
 
   # Linux preview packages join the release the Windows job created.
@@ -48,5 +48,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            packaging/linux/out/nock_*_amd64.deb
-            packaging/linux/out/nock-*-x86_64-linux.tar.gz
+            packaging/linux/out/vey_*_amd64.deb
+            packaging/linux/out/vey-*-x86_64-linux.tar.gz

@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nock: a notch for Windows</title>
+<title>Vey: a notch for Windows</title>
 <meta name="description" content="A native notch and top bar for Windows (with a Linux preview), written in Rust. About 1 MB, about 0% CPU when idle, no Electron. Free and MIT licensed. The demo on this page is playable.">
-<meta property="og:title" content="Nock: a notch for Windows in 1 MB of Rust">
+<meta property="og:title" content="Vey: a notch for Windows in 1 MB of Rust">
 <meta property="og:description" content="Tasks, a focus timer, music, clipboard history and system dropdowns in a native notch. No Electron. Try it right on the page.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://nock.akhileshvarute.me/">
@@ -13,7 +13,7 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Nock: a notch for Windows in 1 MB of Rust">
+<meta name="twitter:title" content="Vey: a notch for Windows in 1 MB of Rust">
 <meta name="twitter:description" content="Tasks, a focus timer, music, clipboard history and system dropdowns in a native notch. No Electron.">
 <meta name="twitter:image" content="https://nock.akhileshvarute.me/og.png">
 <link rel="canonical" href="https://nock.akhileshvarute.me/">
@@ -68,11 +68,11 @@
   <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M9 19h6"/></symbol>
 </svg>
 
-<noscript><p style="padding:90px 20px 20px;font:17px system-ui">The notch demo needs JavaScript. You can still <a href="https://github.com/Akhilesh-Varute/Nock/releases/latest">download Nock</a>.</p></noscript>
+<noscript><p style="padding:90px 20px 20px;font:17px system-ui">The notch demo needs JavaScript. You can still <a href="https://github.com/wela-herveyyy/Vey/releases/latest">download Vey</a>.</p></noscript>
 
 <!-- fake Windows top bar -->
 <div class="bar" aria-hidden="true">
-  <div class="bar-l"><span>nock.akhileshvarute.me</span></div>
+  <div class="bar-l"><span>Vey</span></div>
   <div class="bar-r">
     <svg class="icon hide-s"><use href="#i-wifi"/></svg>
     <svg class="icon hide-s"><use href="#i-bt"/></svg>
@@ -83,7 +83,7 @@
 </div>
 
 <!-- the live notch -->
-<div class="notch" id="notch" role="group" aria-label="Interactive Nock demo">
+<div class="notch" id="notch" role="group" aria-label="Interactive Vey demo">
   <button class="pill" id="pill" type="button" aria-expanded="false" aria-controls="panel">
     <span class="dot"></span>
     <span id="pillText">12:00</span>
@@ -92,7 +92,7 @@
   </button>
   <div class="panel" id="panel" inert>
     <div class="pinner">
-      <div class="tabs" role="tablist" aria-label="Nock tabs">
+      <div class="tabs" role="tablist" aria-label="Vey tabs">
         <button class="tb-i" id="pinBtn" type="button" aria-label="Keep the notch open" aria-pressed="false"><svg class="icon"><use href="#i-pin"/></svg></button>
         <button class="tab" role="tab" id="t-media" data-tab="media" aria-selected="true">Media</button>
         <button class="tab" role="tab" id="t-controls" data-tab="controls" aria-selected="false">Controls</button>
@@ -197,7 +197,7 @@
             <button class="app" data-toast="Pinned apps launch from here" style="--c:#ffb36b"><i><svg class="icon"><use href="#i-cam"/></svg></i>Photos</button>
             <button class="app" data-toast="Pinned apps launch from here" style="--c:#8bb8ff"><i><svg class="icon"><use href="#i-pin"/></svg></i>Maps</button>
             <button class="app" data-toast="Pinned apps launch from here" style="--c:#d6d6e0"><i><svg class="icon"><use href="#i-clock"/></svg></i>Clock</button>
-            <a class="app get" href="https://github.com/Akhilesh-Varute/Nock/releases/latest" data-dl="setup" style="--c:#ff4d14"><i><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg></i>Get Nock</a>
+            <a class="app get" href="https://github.com/wela-herveyyy/Vey/releases/latest" data-dl="setup" style="--c:#ff4d14"><i><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg></i>Get Vey</a>
           </div>
         </div>
 
@@ -232,6 +232,7 @@
     <span>poke it</span>
   </div>
   <div class="wrap">
+    <div style="margin-bottom:18px"><img src="logo.png" alt="Vey logo" width="240" height="80" style="image-rendering:pixelated;display:block"></div>
     <div class="h1w">
     <div class="sticker o ov ov1" aria-hidden="true" style="--r:-5deg; --d:0s">No Electron</div>
     <div class="sticker b ov ov2" aria-hidden="true" style="--r:-3deg; --d:-2s">About 1 MB</div>
@@ -246,12 +247,12 @@
     <p class="lede">The notch above is live, so click it and try everything.</p>
     <div class="ctas">
       <a class="btn" id="dlMain" href="#get"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Download for Windows &amp; Linux</a>
-      <a class="btn alt" href="https://github.com/Akhilesh-Varute/Nock">Read the source<svg class="icon" aria-hidden="true"><use href="#i-up"/></svg></a>
+      <a class="btn alt" href="https://github.com/wela-herveyyy/Vey">Read the source<svg class="icon" aria-hidden="true"><use href="#i-up"/></svg></a>
     </div>
     <div class="proof" data-proof hidden></div>
     <div class="ver" id="verLine">Free. MIT licensed. Windows installer or portable .exe, Linux .deb or tarball (preview).</div>
     <a style="display:inline-block;margin-top:12px" href="https://www.producthunt.com/products/nock-2?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-nock-2" target="_blank" rel="noopener noreferrer"><img alt="Nock - A notch for Windows, in 1 MB of Rust | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1300649&theme=neutral"></a>
-    <div class="note-os" id="osNote">Heads up: Nock is built for Windows 10/11, with a <a href="#get">Linux preview</a>. On a Mac or phone you can still poke the demo.</div>
+    <div class="note-os" id="osNote">Heads up: Vey is built for Windows 10/11, with a <a href="#get">Linux preview</a>. On a Mac or phone you can still poke the demo.</div>
     </div>
     <div class="stickers" aria-hidden="true">
       <div class="sticker o s-ov" style="--r:-5deg; --d:0s">No Electron</div>
@@ -288,9 +289,9 @@
 <section class="blk dark" id="weight">
   <div class="wrap">
     <h2 class="reveal">Heavy? Not here.</h2>
-    <p class="p reveal">Most desktop widgets ship a whole browser to draw a few pixels. Nock is plain Rust. Direct2D draws it, and it only redraws when something changes.</p>
+    <p class="p reveal">Most desktop widgets ship a whole browser to draw a few pixels. Vey is plain Rust. Direct2D draws it, and it only redraws when something changes.</p>
     <div class="vs reveal" id="vs">
-      <div class="vs-row vs-nock"><small>Nock</small><div class="vs-bar"><i>1 MB</i></div></div>
+      <div class="vs-row vs-nock"><small>Vey</small><div class="vs-bar"><i>1 MB</i></div></div>
       <div class="vs-row vs-el"><small>A typical Electron app</small><div class="vs-bar"><i>Hundreds of MB</i></div></div>
     </div>
     <div class="nums reveal">
@@ -299,7 +300,7 @@
       <div class="num"><b data-count="32" data-suffix=" MB">32 MB</b><span>memory while idle</span></div>
       <div class="num"><b data-count="0" data-suffix="">0</b><span>webviews</span></div>
     </div>
-    <p class="fine reveal">Figures are from the project README, measured on one PC. Typical Electron apps use hundreds of MB, but this isn't a benchmark against any specific app. Check yours in Task Manager, Details, nock.exe.</p>
+    <p class="fine reveal">Figures are from the project README, measured on one PC. Typical Electron apps use hundreds of MB, but this isn't a benchmark against any specific app. Check yours in Task Manager, Details, vey.exe.</p>
   </div>
 </section>
 
@@ -336,11 +337,11 @@
 <section class="blk" id="compare">
   <div class="wrap">
     <h2 class="reveal">How it stacks up.</h2>
-    <p class="p reveal">Other notch apps for Windows exist, and some are good. Here is an honest side-by-side. Where Nock is missing something, it says so.</p>
+    <p class="p reveal">Other notch apps for Windows exist, and some are good. Here is an honest side-by-side. Where Vey is missing something, it says so.</p>
     <div class="cmp-wrap reveal">
       <table class="cmp">
-        <caption class="sr">Nock compared with other Windows notch apps</caption>
-        <thead><tr><th scope="col"></th><th scope="col" class="us">Nock</th><th scope="col">NotchPixel</th><th scope="col">Notchify</th><th scope="col">Nook</th></tr></thead>
+        <caption class="sr">Vey compared with other Windows notch apps</caption>
+        <thead><tr><th scope="col"></th><th scope="col" class="us">Vey</th><th scope="col">NotchPixel</th><th scope="col">Notchify</th><th scope="col">Nook</th></tr></thead>
         <tbody>
           <tr><th scope="row">Price</th><td class="us">Free</td><td>$9.99 once, 7-day trial</td><td>$2.49, free trial</td><td>Free</td></tr>
           <tr><th scope="row">Source code</th><td class="us">Open, MIT</td><td>Not stated</td><td>Not stated</td><td>Open, MIT</td></tr>
@@ -354,18 +355,18 @@
         </tbody>
       </table>
     </div>
-    <p class="fine reveal">Compared from each product's own page in October 2026. "Not stated" means the page doesn't say. Something out of date? <a href="https://github.com/Akhilesh-Varute/Nock/issues">Open an issue</a> and it gets fixed.</p>
+    <p class="fine reveal">Compared from each product's own page in October 2026. "Not stated" means the page doesn't say. Something out of date? <a href="https://github.com/wela-herveyyy/Vey/issues">Open an issue</a> and it gets fixed.</p>
   </div>
 </section>
 
 <section class="blk dark" id="honest">
   <div class="wrap">
     <h2 class="reveal">Windows will side-eye it.</h2>
-    <p class="p reveal">Nock isn't code-signed yet, so Windows doesn't know me. That's all the warning means. The source is public, so you can read it before you run anything.</p>
+    <p class="p reveal">Vey isn't code-signed yet, so Windows doesn't know me. That's all the warning means. The source is public, so you can read it before you run anything.</p>
     <div class="steps">
       <div class="step reveal"><b>"Windows protected your PC"</b><p>Click <b style="display:inline;font-size:inherit">More info</b>, then <b style="display:inline;font-size:inherit">Run anyway</b>. That's the usual SmartScreen note.</p></div>
-      <div class="step reveal"><b>Smart App Control on?</b><p>It blocks unsigned apps outright. <a href="https://github.com/Akhilesh-Varute/Nock#windows-says-smart-app-control-blocked-an-app">The README has the fix.</a></p></div>
-      <div class="step reveal"><b>Don't trust it? Good.</b><p>It's MIT licensed and small enough to read. <a href="https://github.com/Akhilesh-Varute/Nock">Go look.</a></p></div>
+      <div class="step reveal"><b>Smart App Control on?</b><p>It blocks unsigned apps outright. <a href="https://github.com/wela-herveyyy/Vey#windows-says-smart-app-control-blocked-an-app">The README has the fix.</a></p></div>
+      <div class="step reveal"><b>Don't trust it? Good.</b><p>It's MIT licensed and small enough to read. <a href="https://github.com/wela-herveyyy/Vey">Go look.</a></p></div>
     </div>
   </div>
 </section>
@@ -374,12 +375,12 @@
   <div class="wrap">
     <h2 class="reveal">Go on. It's 1&nbsp;MB.</h2>
     <div class="ctas reveal">
-      <a class="btn" href="https://github.com/Akhilesh-Varute/Nock/releases/latest" data-dl="setup"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Windows installer</a>
-      <a class="btn alt" href="https://github.com/Akhilesh-Varute/Nock/releases/latest" data-dl="portable"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Windows portable .exe</a>
+      <a class="btn" href="https://github.com/wela-herveyyy/Vey/releases/latest" data-dl="setup"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Windows installer</a>
+      <a class="btn alt" href="https://github.com/wela-herveyyy/Vey/releases/latest" data-dl="portable"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Windows portable .exe</a>
     </div>
     <div class="ctas reveal">
-      <a class="btn alt" href="https://github.com/Akhilesh-Varute/Nock/releases/latest" data-dl="deb"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Linux .deb (preview)</a>
-      <a class="btn alt" href="https://github.com/Akhilesh-Varute/Nock/releases/latest" data-dl="targz"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Linux .tar.gz (preview)</a>
+      <a class="btn alt" href="https://github.com/wela-herveyyy/Vey/releases/latest" data-dl="deb"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Linux .deb (preview)</a>
+      <a class="btn alt" href="https://github.com/wela-herveyyy/Vey/releases/latest" data-dl="targz"><svg class="icon" aria-hidden="true"><use href="#i-dl"/></svg>Linux .tar.gz (preview)</a>
     </div>
     <div class="proof" data-proof hidden></div>
     <div class="ver" id="verLine2">Free. Windows 10/11. The installer adds a Start menu entry; the portable file is just the app. Linux is a preview for X11 or XWayland: fewer features, less tested.</div>
@@ -390,7 +391,7 @@
 <footer>
   <div class="wrap">
     <span>Made by <a href="https://akhileshvarute.me/">Akhilesh Varute</a>. MIT licensed.</span>
-    <span><a href="https://github.com/Akhilesh-Varute/Nock">Source</a> / <a href="https://github.com/Akhilesh-Varute/Nock/issues">Report a bug or idea</a> / <a href="https://github.com/Akhilesh-Varute/Nock/releases">All releases</a> / <a href="https://www.producthunt.com/products/nock-2">Product Hunt</a> / <a href="https://youtu.be/rGcVKVOOf6A">Video</a></span>
+    <span><a href="https://github.com/wela-herveyyy/Vey">Source</a> / <a href="https://github.com/wela-herveyyy/Vey/issues">Report a bug or idea</a> / <a href="https://github.com/wela-herveyyy/Vey/releases">All releases</a> / <a href="https://www.producthunt.com/products/nock-2">Product Hunt</a> / <a href="https://youtu.be/rGcVKVOOf6A">Video</a></span>
   </div>
 </footer>
 

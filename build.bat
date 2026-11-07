@@ -2,4 +2,4 @@
 cargo build --release
 if errorlevel 1 exit /b 1
 echo.
-echo Built: %~dp0target\release\nock.exe
+echo Built: %~dp0target\release\vey.exe

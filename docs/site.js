@@ -1,4 +1,4 @@
-/* Nock landing page: the interactive notch demo and page motion. Vanilla JS, no dependencies. */
+/* Vey landing page: the interactive notch demo and page motion. Vanilla JS, no dependencies. */
 (function () {
   'use strict';
   var $ = function (s, r) { return (r || document).querySelector(s); };
@@ -23,7 +23,7 @@
   ];
   var clips = [
     { t: 'C:\\Projects\\notes.txt', k: 'path', p: true },
-    { t: 'https://github.com/Akhilesh-Varute/Nock', k: 'link', p: false },
+    { t: 'https://github.com/wela-herveyyy/Vey', k: 'link', p: false },
     { t: 'Standup at 10:30, room 4', k: 'text', p: false },
     { t: 'cargo build --release', k: 'code', p: false },
     { t: 'hello@example.com', k: 'mail', p: false }
@@ -444,10 +444,10 @@
   function hrefs(rel) {
     var setup = '', portable = '', deb = '', targz = '';
     (rel.assets || []).forEach(function (a) {
-      if (/^NockSetup-.*\.exe$/i.test(a.name)) setup = a.browser_download_url;
-      if (/^Nock-portable-.*\.exe$/i.test(a.name)) portable = a.browser_download_url;
-      if (/^nock_.*_amd64\.deb$/i.test(a.name)) deb = a.browser_download_url;
-      if (/^nock-.*-linux\.tar\.gz$/i.test(a.name)) targz = a.browser_download_url;
+      if (/^VeySetup-.*\.exe$/i.test(a.name)) setup = a.browser_download_url;
+      if (/^Vey-portable-.*\.exe$/i.test(a.name)) portable = a.browser_download_url;
+      if (/^vey_.*_amd64\.deb$/i.test(a.name)) deb = a.browser_download_url;
+      if (/^vey-.*-linux\.tar\.gz$/i.test(a.name)) targz = a.browser_download_url;
     });
     $$('[data-dl="setup"]').forEach(function (a) { if (setup) a.href = setup; });
     $$('[data-dl="portable"]').forEach(function (a) { if (portable) a.href = portable; });
@@ -461,7 +461,7 @@
     }
   }
   try {
-    fetch('https://api.github.com/repos/Akhilesh-Varute/Nock/releases/latest').then(function (r) { return r.ok ? r.json() : null; })
+    fetch('https://api.github.com/repos/wela-herveyyy/Vey/releases/latest').then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) { if (j) hrefs(j); }).catch(function () {});
   } catch (e) {}
 
@@ -474,12 +474,12 @@
     });
   }
   (function () {
-    var KEY = 'nockProof';
+    var KEY = 'veyProof';
     try {
       var c = JSON.parse(sessionStorage.getItem(KEY));
       if (c && Date.now() - c.t < 600000) { showProof(c.s, c.d); return; }
     } catch (e) {}
-    var api = 'https://api.github.com/repos/Akhilesh-Varute/Nock';
+    var api = 'https://api.github.com/repos/wela-herveyyy/Vey';
     Promise.all([
       fetch(api).then(function (r) { return r.ok ? r.json() : null; }),
       fetch(api + '/releases?per_page=100').then(function (r) { return r.ok ? r.json() : null; })

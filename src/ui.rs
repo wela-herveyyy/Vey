@@ -639,27 +639,82 @@ fn page_media(a: &App, ca: f32, hits: &mut Vec<Hit>) {
 
 // -------------------------------------------------------------- controls ----
 
+/// Shared Controls-style borderless matte card: tinted circular icon badge on the left,
+/// stacked primary title (`T1`) + muted subtitle (`T3`), and optional trailing glyph.
+#[allow(clippy::too_many_arguments)]
+fn card_tile(
+    a: &App,
+    ca: f32,
+    hits: &mut Vec<Hit>,
+    r: Rect,
+    act: Option<Act>,
+    glyph: char,
+    tint: Color,
+    title: &str,
+    title_col: Color,
+    sub: &str,
+    sub_col: Color,
+    trailing: Option<(char, Color)>,
+    focused: bool,
+    on: bool,
+) {
+    let g = &a.gfx;
+    let f = &g.fonts;
+    let k = if let Some(ac) = act {
+        hits.push(Hit { r, act: ac });
+        hot_k(a, ac)
+    } else {
+        0.0
+    };
+    if on {
+        g.fill_rrect(r, 18.0, a.accent.fade(ca));
+        if k > 0.01 {
+            g.fill_rrect(r, 18.0, Color::white(0.10 * k * ca));
+        }
+    } else if focused {
+        g.fill_rrect(r, 18.0, HOVER.fade(ca));
+        g.fill_rrect(r, 18.0, tint.fade(0.14 * ca));
+    } else {
+        g.fill_rrect(r, 18.0, Color::white((0.09 + 0.08 * k) * ca));
+    }
+
+    let ic = Rect::new(r.x + 12.0, r.y + (r.h - 34.0) / 2.0, 34.0, 34.0);
+    g.fill_circle(
+        ic.cx(),
+        ic.cy(),
+        17.0,
+        (if on { Color(0.0, 0.0, 0.0, 0.14) } else { tint.fade(0.16) }).fade(ca),
+    );
+    g.icon(glyph, ic, &f.icon14, (if on { BLACK } else { tint }).fade(ca));
+
+    let (tc, sc) = if on {
+        (BLACK, Color(0.0, 0.0, 0.0, 0.65))
+    } else {
+        (title_col, sub_col)
+    };
+    let right_pad = if trailing.is_some() { 34.0 } else { 10.0 };
+    let tw = (r.w - 56.0 - right_pad).max(40.0);
+    let ty = r.y + (r.h - 43.0) / 2.0;
+    g.text(title, Rect::new(r.x + 56.0, ty, tw, 22.0), &f.body, tc.fade(ca), Align::Left);
+    g.text(sub, Rect::new(r.x + 56.0, ty + 23.0, tw, 18.0), &f.tiny, sc.fade(ca), Align::Left);
+
+    if let Some((tg, tcol)) = trailing {
+        g.icon(tg, Rect::new(r.x + r.w - 30.0, r.y, 20.0, r.h), &f.icon14, tcol.fade(ca));
+    }
+}
+
 /// One rounded tile: round icon, title, small state line. `on` fills it with the accent.
 #[allow(clippy::too_many_arguments)]
 fn tile(a: &App, ca: f32, hits: &mut Vec<Hit>, r: Rect, act: Act, glyph: char, title: &str, sub: &str, on: bool) {
-    let g = &a.gfx;
-    let f = &g.fonts;
-    hits.push(Hit { r, act });
-    let hovered = hot(a, act);
-    let bg = if on { a.accent } else if hovered { HOVER } else { SURF };
-    g.fill_rrect(r, 18.0, bg.fade(ca));
-    if on && hovered {
-        g.fill_rrect(r, 18.0, Color::white(0.10 * ca));
-    }
-    let ic = Rect::new(r.x + 12.0, r.y + (r.h - 34.0) / 2.0, 34.0, 34.0);
-    let tint = match glyph { '\u{E722}' => Color(0.98, 0.45, 0.55, 1.0), '\u{E7F4}' => C_MEM, '\u{E767}' => C_UP, '\u{E774}' => C_CPU, '\u{E83F}' => C_BAT, _ => T1 };
-    g.fill_circle(ic.cx(), ic.cy(), 17.0, (if on { Color(0.0, 0.0, 0.0, 0.14) } else { tint.fade(0.16) }).fade(ca));
-    g.icon(glyph, ic, &f.icon14, (if on { BLACK } else { tint }).fade(ca));
-    let (tc, sc) = if on { (BLACK, Color(0.0, 0.0, 0.0, 0.65)) } else { (T1, T3) };
-    // title and state line stacked, centred beside the icon
-    let ty = r.y + (r.h - 44.0) / 2.0;
-    g.text(title, Rect::new(r.x + 56.0, ty, r.w - 64.0, 22.0), &f.body, tc.fade(ca), Align::Left);
-    g.text(sub, Rect::new(r.x + 56.0, ty + 24.0, r.w - 64.0, 18.0), &f.tiny, sc.fade(ca), Align::Left);
+    let tint = match glyph {
+        '\u{E722}' => Color(0.98, 0.45, 0.55, 1.0),
+        '\u{E7F4}' => C_MEM,
+        '\u{E767}' => C_UP,
+        '\u{E774}' => C_CPU,
+        '\u{E83F}' => C_BAT,
+        _ => T1,
+    };
+    card_tile(a, ca, hits, r, Some(act), glyph, tint, title, T1, sub, T3, None, false, on);
 }
 
 fn page_controls(a: &App, ca: f32, hits: &mut Vec<Hit>) {
@@ -891,6 +946,201 @@ fn spinner(g: &Gfx, cx: f32, cy: f32, r: f32, t: f32, col: Color, ca: f32) {
     }
 }
 
+fn pinned_app_sub(target: &str) -> &'static str {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        "Web shortcut"
+    } else if target.starts_with("ms-settings:") {
+        "Windows settings"
+    } else if target.starts_with("shell:AppsFolder") {
+        "Pinned app"
+    } else {
+        "Pinned shortcut"
+    }
+}
+
+fn draw_craft_tile(a: &App, idx: usize, r: Rect, ca: f32, hits: &mut Vec<Hit>) {
+    use crate::craft::{SPECS, State};
+    let g = &a.gfx;
+    let f = &g.fonts;
+    let spec = &SPECS[idx];
+    let st = &a.craft_states[idx];
+    let act = Act::CraftClick(idx);
+    let wact = Act::CraftWeb(idx);
+    let installing = matches!(st, State::Installing { .. });
+    let show_web_btn = matches!(st, State::Installed { .. } | State::Failed(_));
+
+    if !installing {
+        hits.push(Hit { r, act });
+    }
+    let web_r = Rect::new(r.x + r.w - 34.0, r.y + (r.h - 24.0) / 2.0, 24.0, 24.0);
+    let over_main = !installing && hot(a, act);
+    if show_web_btn && (over_main || hot(a, wact) || matches!(st, State::Failed(_))) {
+        hits.push(Hit { r: web_r, act: wact });
+    }
+
+    let k = if installing {
+        0.35
+    } else {
+        hot_k(a, act).max(hot_k(a, wact))
+    };
+    g.fill_rrect(r, 18.0, Color::white((0.09 + 0.08 * k) * ca));
+
+    // Left 34x34 tinted circular icon badge (Controls Tile Design System)
+    let tint = spec.tint;
+    let ic = Rect::new(r.x + 12.0, r.y + (r.h - 34.0) / 2.0, 34.0, 34.0);
+    g.fill_circle(ic.cx(), ic.cy(), 17.0, tint.fade(0.16 * ca));
+    if installing {
+        spinner(g, ic.cx(), ic.cy(), 9.0, a.spin_t, tint, ca);
+    } else if let Some(bmp) = a.craft_icons[idx].as_ref() {
+        g.draw_bitmap(bmp, Rect::new(ic.cx() - 11.0, ic.cy() - 11.0, 22.0, 22.0), 4.0, ca);
+    } else {
+        g.icon(spec.glyph, ic, &f.icon14, tint.fade(ca));
+    }
+
+    // Subtitle & semantic color per download/install state
+    let hovered = over_main && !hot(a, wact);
+    let (sub, sub_col): (String, Color) = match st {
+        State::NotInstalled => {
+            if hovered {
+                ("Click to download portable app".into(), tint)
+            } else {
+                (format!("{}  \u{00B7}  Get", spec.tagline), T3)
+            }
+        }
+        State::Installing { step, pct } => match pct {
+            Some(p) => (format!("{step}  \u{00B7}  {p}%"), tint),
+            None => (step.clone(), tint),
+        },
+        State::Installed { version, .. } => {
+            if hot(a, wact) {
+                ("Open official project page".into(), C_CPU)
+            } else if hovered {
+                ("Installed  \u{00B7}  Click to launch".into(), C_BAT)
+            } else if let Some(v) = version {
+                (format!("{}  \u{00B7}  {v}", spec.tagline), T3)
+            } else {
+                (format!("{}  \u{00B7}  Ready", spec.tagline), T3)
+            }
+        }
+        State::Failed(err) => {
+            if hot(a, wact) {
+                ("Open download page in browser".into(), C_CPU)
+            } else {
+                (format!("{err}  \u{00B7}  Retry"), Color(0.98, 0.45, 0.55, 1.0))
+            }
+        }
+    };
+
+    let tw = (r.w - 56.0 - 38.0).max(40.0);
+    let ty = r.y + (r.h - 43.0) / 2.0;
+    g.text(spec.name, Rect::new(r.x + 56.0, ty, tw, 22.0), &f.body, T1.fade(ca), Align::Left);
+    g.text(&sub, Rect::new(r.x + 56.0, ty + 23.0, tw, 18.0), &f.tiny, sub_col.fade(ca), Align::Left);
+
+    // Trailing action / status glyph inside the card
+    match st {
+        State::NotInstalled => {
+            let col = if hovered { tint } else { T2 };
+            g.icon('\u{E896}', web_r, &f.icon14, col.fade(ca));
+        }
+        State::Installing { .. } => {}
+        State::Installed { .. } => {
+            if over_main || hot(a, wact) {
+                g.fill_circle(
+                    web_r.cx(),
+                    web_r.cy(),
+                    12.0,
+                    Color::white((if hot(a, wact) { 0.16 } else { 0.08 }) * ca),
+                );
+                g.icon(
+                    '\u{E71B}',
+                    web_r,
+                    &f.icon14,
+                    (if hot(a, wact) { C_CPU } else { T2 }).fade(ca),
+                );
+            } else {
+                g.icon('\u{E8A7}', web_r, &f.icon14, T3.fade(0.75 * ca));
+            }
+        }
+        State::Failed(_) => {
+            g.fill_circle(
+                web_r.cx(),
+                web_r.cy(),
+                12.0,
+                Color::white((if hot(a, wact) { 0.16 } else { 0.08 }) * ca),
+            );
+            g.icon(
+                '\u{E71B}',
+                web_r,
+                &f.icon14,
+                (if hot(a, wact) { C_CPU } else { T2 }).fade(ca),
+            );
+        }
+    }
+}
+
+fn draw_pinned_tile(a: &App, i: usize, r: Rect, ca: f32, hits: &mut Vec<Hit>) {
+    let Some(e) = a.apps.get(i) else { return };
+    let g = &a.gfx;
+    let f = &g.fonts;
+    let act = Act::Launch(i);
+    let xact = Act::AppUnpin(i);
+    hits.push(Hit { r, act });
+
+    let xr = Rect::new(r.x + r.w - 34.0, r.y + (r.h - 24.0) / 2.0, 24.0, 24.0);
+    let over = hot(a, act) || hot(a, xact);
+    if over {
+        hits.push(Hit { r: xr, act: xact });
+    }
+
+    let k = hot_k(a, act).max(hot_k(a, xact));
+    g.fill_rrect(r, 18.0, Color::white((0.09 + 0.08 * k) * ca));
+
+    let hue = name_color(&e.name);
+    let ic = Rect::new(r.x + 12.0, r.y + (r.h - 34.0) / 2.0, 34.0, 34.0);
+    g.fill_circle(ic.cx(), ic.cy(), 17.0, hue.fade(0.16 * ca));
+    match a.app_icons.get(i).and_then(|b| b.as_ref()) {
+        Some(bmp) => g.draw_bitmap(bmp, Rect::new(ic.cx() - 11.0, ic.cy() - 11.0, 22.0, 22.0), 4.0, ca),
+        None => {
+            let letter: String = e.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+            g.text(&letter, ic, &f.body, hue.fade(ca), Align::Center);
+        }
+    }
+
+    let sub = if hot(a, xact) {
+        "Unpin from Apps"
+    } else if over {
+        "Click to launch"
+    } else {
+        pinned_app_sub(&e.target)
+    };
+    let sub_col = if hot(a, xact) {
+        Color(0.98, 0.45, 0.55, 1.0)
+    } else if over {
+        T2
+    } else {
+        T3
+    };
+    let tw = (r.w - 56.0 - if over { 38.0 } else { 12.0 }).max(40.0);
+    let ty = r.y + (r.h - 43.0) / 2.0;
+    g.text(&e.name, Rect::new(r.x + 56.0, ty, tw, 22.0), &f.body, T1.fade(ca), Align::Left);
+    g.text(sub, Rect::new(r.x + 56.0, ty + 23.0, tw, 18.0), &f.tiny, sub_col.fade(ca), Align::Left);
+
+    if over {
+        g.fill_circle(
+            xr.cx(),
+            xr.cy(),
+            12.0,
+            Color::white((if hot(a, xact) { 0.16 } else { 0.08 }) * ca),
+        );
+        g.icon(
+            '\u{E711}',
+            xr,
+            &f.icon14,
+            (if hot(a, xact) { Color(0.98, 0.45, 0.55, 1.0) } else { T2 }).fade(ca),
+        );
+    }
+}
+
 fn page_apps(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     if a.picking {
         page_app_picker(a, ca, hits);
@@ -898,48 +1148,147 @@ fn page_apps(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     }
     let g = &a.gfx;
     let f = &g.fonts;
-    let (cols, tw, th) = (6usize, 88.0, 86.0);
-    let gap = (EXP_W - 56.0 - cols as f32 * tw) / (cols as f32 - 1.0);
-    let cell = |i: usize| {
-        let (c, r) = (i % cols, i / cols);
-        Rect::new(28.0 + c as f32 * (tw + gap), 6.0 + r as f32 * (th + 8.0), tw, th)
+
+    // Header strip: segmented borderless filter pills (All | Craft | Pinned), calm status, right actions
+    let pills = [
+        (AppsFilter::All, "All", 44.0),
+        (AppsFilter::Craft, "Craft", 54.0),
+        (AppsFilter::Pinned, "Pinned", 62.0),
+    ];
+    let mut px = 24.0;
+    for (flt, label, pw) in pills {
+        let pr = Rect::new(px, 3.0, pw, 22.0);
+        let pact = Act::AppsFilterSet(flt);
+        hits.push(Hit { r: pr, act: pact });
+        let active = a.apps_filter == flt;
+        let bg = if active {
+            C_CPU.fade(0.18)
+        } else if hot(a, pact) {
+            HOVER
+        } else {
+            SURF
+        };
+        g.fill_rrect(pr, 11.0, bg.fade(ca));
+        g.text(
+            label,
+            pr,
+            &f.tiny,
+            (if active { C_CPU } else { T2 }).fade(ca),
+            Align::Center,
+        );
+        px += pw + 6.0;
+    }
+
+    let installed_craft = a
+        .craft_states
+        .iter()
+        .filter(|s| matches!(s, crate::craft::State::Installed { .. }))
+        .count();
+    if let Some((msg, ok, t0)) = &a.craft_toast {
+        if t0.elapsed().as_secs() < 6 {
+            let col = if *ok { C_BAT } else { Color(0.98, 0.45, 0.55, 1.0) };
+            g.text(msg, Rect::new(204.0, 2.0, 244.0, 24.0), &f.tiny, col.fade(ca), Align::Left);
+        } else {
+            let note = match a.apps_filter {
+                AppsFilter::Craft => format!("{installed_craft}/4 installed  \u{00B7}  Rust native"),
+                AppsFilter::Pinned => format!("{} pinned", a.apps.len()),
+                AppsFilter::All => format!("{installed_craft}/4 Craft  \u{00B7}  {} pinned", a.apps.len()),
+            };
+            g.text(&note, Rect::new(204.0, 2.0, 244.0, 24.0), &f.tiny, T3.fade(ca), Align::Left);
+        }
+    } else {
+        let note = match a.apps_filter {
+            AppsFilter::Craft => format!("{installed_craft}/4 installed  \u{00B7}  Rust native"),
+            AppsFilter::Pinned => format!("{} pinned", a.apps.len()),
+            AppsFilter::All => format!("{installed_craft}/4 Craft  \u{00B7}  {} pinned", a.apps.len()),
+        };
+        g.text(&note, Rect::new(204.0, 2.0, 244.0, 24.0), &f.tiny, T3.fade(ca), Align::Left);
+    }
+
+    // Secondary header chip (ArtCraft site on Craft filter; + Add app on All/Pinned)
+    if a.apps_filter == AppsFilter::Craft {
+        let wb = Rect::new(EXP_W - 138.0, 2.0, 82.0, 24.0);
+        hits.push(Hit { r: wb, act: Act::CraftSite });
+        g.fill_rrect(wb, 12.0, (if hot(a, Act::CraftSite) { HOVER } else { SURF }).fade(ca));
+        g.icon('\u{E71B}', Rect::new(wb.x + 6.0, wb.y, 22.0, wb.h), &f.icon14, C_CPU.fade(ca));
+        g.text("ArtCraft", Rect::new(wb.x + 28.0, wb.y, wb.w - 34.0, wb.h), &f.tiny, T1.fade(ca), Align::Left);
+    } else if a.apps.len() < 12 {
+        let ab = Rect::new(EXP_W - 138.0, 2.0, 82.0, 24.0);
+        hits.push(Hit { r: ab, act: Act::AppAdd });
+        g.fill_rrect(ab, 12.0, (if hot(a, Act::AppAdd) { HOVER } else { SURF }).fade(ca));
+        g.icon('\u{E710}', Rect::new(ab.x + 6.0, ab.y, 22.0, ab.h), &f.icon14, C_CPU.fade(ca));
+        g.text("Add app", Rect::new(ab.x + 28.0, ab.y, ab.w - 34.0, ab.h), &f.tiny, T1.fade(ca), Align::Left);
+    }
+
+    // Refresh button (re-scans Craft installs & rotates during downloads)
+    let rf = Rect::new(EXP_W - 50.0, 2.0, 26.0, 24.0);
+    hits.push(Hit { r: rf, act: Act::CraftRefresh });
+    g.fill_rrect(rf, 12.0, (if hot(a, Act::CraftRefresh) { HOVER } else { SURF }).fade(ca));
+    let busy = a.craft_busy();
+    let deg = if busy { a.spin_t * 360.0 } else { 0.0 };
+    g.rotated(rf.cx(), rf.cy(), deg, || {
+        g.icon('\u{E72C}', rf, &f.icon14, (if busy { C_CPU } else { T2 }).fade(ca))
+    });
+
+    // 2-column Controls Tile Grid (x = 24.0, w = 270.0, gap = 12.0, x = 306.0)
+    let items = a.apps_items();
+    let craft_only = a.apps_filter == AppsFilter::Craft;
+    let (y0, th, rgap, vis_rows) = if craft_only {
+        (40.0, 54.0, 10.0, 2usize)
+    } else {
+        (33.0, 50.0, 8.0, APP_TILE_ROWS)
     };
-    for (i, e) in a.apps.iter().enumerate().take(12) {
-        let rect = cell(i);
-        let act = Act::Launch(i);
-        hits.push(Hit { r: rect, act });
-        let x = Rect::new(rect.x + rect.w - 22.0, rect.y + 3.0, 19.0, 19.0);
-        let xact = Act::AppUnpin(i);
-        hits.push(Hit { r: x, act: xact });
-        let over = hot(a, act) || hot(a, xact);
-        let k = hot_k(a, act).max(hot_k(a, xact));
-        g.fill_rrect(rect, 16.0, Color::white((0.05 + 0.07 * k) * ca));
-        let ic = Rect::new(rect.cx() - 18.0, rect.y + 10.0, 36.0, 36.0);
-        match a.app_icons.get(i).and_then(|b| b.as_ref()) {
-            Some(bmp) => g.draw_bitmap(bmp, ic, 0.0, ca),
-            None => {
-                let hue = name_color(&e.name);
-                g.fill_circle(ic.cx(), ic.cy(), 18.0, hue.fade(ca));
-                let letter: String = e.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                g.text(&letter, ic, &g.fonts.title, Color(0.0, 0.0, 0.0, 0.75 * ca), Align::Center);
+    let total_rows = items.len().div_ceil(2);
+    let scroll_row = if craft_only {
+        0
+    } else {
+        a.apps_scroll.min(total_rows.saturating_sub(vis_rows))
+    };
+
+    for r_idx in 0..vis_rows {
+        let row = scroll_row + r_idx;
+        for col in 0..2usize {
+            let Some(item) = items.get(row * 2 + col) else { break };
+            let rect = Rect::new(
+                24.0 + col as f32 * (270.0 + 12.0),
+                y0 + r_idx as f32 * (th + rgap),
+                270.0,
+                th,
+            );
+            match *item {
+                AppsItem::Craft(ci) => draw_craft_tile(a, ci, rect, ca, hits),
+                AppsItem::Pinned(pi) => draw_pinned_tile(a, pi, rect, ca, hits),
+                AppsItem::AddApp => card_tile(
+                    a,
+                    ca,
+                    hits,
+                    rect,
+                    Some(Act::AppAdd),
+                    '\u{E710}',
+                    C_CPU,
+                    "Add app",
+                    T1,
+                    "Pin an installed Windows app",
+                    T3,
+                    None,
+                    false,
+                    false,
+                ),
             }
         }
-        g.text(&e.name, Rect::new(rect.x + 4.0, rect.y + 52.0, rect.w - 8.0, 24.0), &f.tiny, T2.fade(ca), Align::Center);
-        if over {
-            // unpin
-            g.fill_circle(x.cx(), x.cy(), 8.5, Color(0.0, 0.0, 0.0, 0.75 * ca));
-            g.icon('\u{E711}', x, &f.icon14, (if hot(a, xact) { Color(1.0, 0.5, 0.5, 1.0) } else { T1 }).fade(ca));
-        }
     }
-    if a.apps.len() < 12 {
-        let rect = cell(a.apps.len());
-        hits.push(Hit { r: rect, act: Act::AppAdd });
-        let on = hot(a, Act::AppAdd);
-        g.fill_rrect(rect, 16.0, Color::white((if on { 0.12 } else { 0.04 }) * ca));
-        g.stroke_rrect(rect, 16.0, Color::white((if on { 0.35 } else { 0.14 }) * ca), 1.0);
-        g.fill_circle(rect.cx(), rect.y + 28.0, 18.0, a.accent.fade((if on { 0.4 } else { 0.22 }) * ca));
-        g.icon('\u{E710}', Rect::new(rect.cx() - 18.0, rect.y + 10.0, 36.0, 36.0), &f.icon14, a.accent.fade(ca));
-        g.text("Add app", Rect::new(rect.x + 4.0, rect.y + 52.0, rect.w - 8.0, 24.0), &f.tiny, T2.fade(ca), Align::Center);
+
+    if total_rows > vis_rows {
+        let track_h = vis_rows as f32 * (th + rgap) - rgap;
+        let track = Rect::new(EXP_W - 14.0, y0, 4.0, track_h);
+        g.fill_rrect(track, 2.0, Color::white(0.07 * ca));
+        let thumb_h = (track_h * vis_rows as f32 / total_rows as f32).max(20.0);
+        let frac = scroll_row as f32 / (total_rows - vis_rows) as f32;
+        g.fill_rrect(
+            Rect::new(track.x, y0 + (track_h - thumb_h) * frac.clamp(0.0, 1.0), 4.0, thumb_h),
+            2.0,
+            C_CPU.fade(0.75 * ca),
+        );
     }
 }
 
@@ -994,94 +1343,153 @@ fn page_shelf(a: &App, ca: f32, hits: &mut Vec<Hit>) {
 fn page_app_picker(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     let g = &a.gfx;
     let f = &g.fonts;
-    g.text("Add an app", Rect::new(28.0, 4.0, 160.0, 26.0), &f.body, T1.fade(ca), Align::Left);
-    // search chip (click, then type) and Done
-    let done = Rect::new(EXP_W - 24.0 - 76.0, 4.0, 76.0, 26.0);
-    hits.push(Hit { r: done, act: Act::AppDone });
-    g.fill_rrect(done, 13.0, (if hot(a, Act::AppDone) { Color::white(1.0) } else { Color::white(0.92) }).fade(ca));
-    g.text("Done", done, &f.small, Color(0.0, 0.0, 0.0, ca), Align::Center);
-    let sr = Rect::new(done.x - 12.0 - 210.0, 4.0, 210.0, 26.0);
+
+    // Header strip matching Controls / Work design language
+    let back = Rect::new(24.0, 3.0, 62.0, 24.0);
+    hits.push(Hit { r: back, act: Act::AppDone });
+    g.fill_rrect(back, 12.0, (if hot(a, Act::AppDone) { HOVER } else { SURF }).fade(ca));
+    g.text("\u{2039} Back", back, &f.small, T1.fade(ca), Align::Center);
+
+    let head = if a.app_loading && a.app_list.is_some() {
+        "Add an app  \u{00B7}  Updating\u{2026}"
+    } else {
+        "Add an app"
+    };
+    g.text(head, Rect::new(96.0, 3.0, 220.0, 24.0), &f.small, T2.fade(ca), Align::Left);
+
+    let rf = Rect::new(EXP_W - 50.0, 3.0, 26.0, 24.0);
+    hits.push(Hit { r: rf, act: Act::AppRefresh });
+    g.fill_rrect(rf, 12.0, (if hot(a, Act::AppRefresh) { HOVER } else { SURF }).fade(ca));
+    let deg = if a.app_loading { a.spin_t * 360.0 } else { 0.0 };
+    g.rotated(rf.cx(), rf.cy(), deg, || {
+        g.icon('\u{E72C}', rf, &f.icon14, (if a.app_loading { C_CPU } else { T2 }).fade(ca))
+    });
+
+    let sr = Rect::new(EXP_W - 236.0, 3.0, 178.0, 24.0);
     let typing = a.entry_search;
     if typing || !a.app_filter.is_empty() {
         let mut t = a.app_filter.clone();
         if typing {
             t.push('\u{2502}');
         }
-        g.fill_rrect(sr, 13.0, Color::white(0.14 * ca));
-        g.text(&t, Rect::new(sr.x + 12.0, sr.y, sr.w - 16.0, sr.h), &f.small, T1.fade(ca), Align::Left);
+        g.fill_rrect(sr, 12.0, HOVER.fade(ca));
+        g.text(&t, Rect::new(sr.x + 10.0, sr.y, sr.w - 16.0, sr.h), &f.small, T1.fade(ca), Align::Left);
     } else {
-        g.fill_rrect(sr, 13.0, Color::white((if hot(a, Act::AppSearch) { 0.12 } else { 0.07 }) * ca));
-        g.icon('\u{E721}', Rect::new(sr.x + 6.0, sr.y, 24.0, sr.h), &f.icon14, T3.fade(ca));
-        g.text("Search apps", Rect::new(sr.x + 34.0, sr.y, sr.w - 40.0, sr.h), &f.small, T3.fade(ca), Align::Left);
+        g.fill_rrect(sr, 12.0, (if hot(a, Act::AppSearch) { HOVER } else { SURF }).fade(ca));
+        g.icon('\u{E721}', Rect::new(sr.x + 6.0, sr.y, 22.0, sr.h), &f.icon14, T3.fade(ca));
+        g.text("Search apps", Rect::new(sr.x + 29.0, sr.y, sr.w - 34.0, sr.h), &f.small, T3.fade(ca), Align::Left);
     }
     hits.push(Hit { r: sr, act: Act::AppSearch });
-    let rf = Rect::new(sr.x - 36.0, 4.0, 26.0, 26.0);
-    hits.push(Hit { r: rf, act: Act::AppRefresh });
-    g.fill_rrect(rf, 13.0, Color::white((if hot(a, Act::AppRefresh) { 0.14 } else { 0.07 }) * ca));
-    let deg = if a.app_loading { a.spin_t * 360.0 } else { 0.0 };
-    g.rotated(rf.cx(), rf.cy(), deg, || g.icon('\u{E72C}', rf, &f.icon14, (if a.app_loading { a.accent } else { T2 }).fade(ca)));
-    if a.app_loading && a.app_list.is_some() {
-        g.text("Updating\u{2026}", Rect::new(130.0, 4.0, 100.0, 26.0), &f.tiny, T3.fade(ca), Align::Left);
-    }
 
-    let list = Rect::new(24.0, 40.0, EXP_W - 48.0, PICK_ROWS as f32 * 32.0);
     let Some(_) = &a.app_list else {
-        // still asking Windows for the list; after 15 s offer to try again
         if a.app_load_t0.is_some_and(|t| t.elapsed().as_secs() >= 15) {
-            g.text("Windows is taking longer than usual to list your apps.", Rect::new(0.0, 84.0, EXP_W, 24.0), &f.body, T2.fade(ca), Align::Center);
-            let r = Rect::new(EXP_W / 2.0 - 60.0, 120.0, 120.0, 32.0);
-            hits.push(Hit { r, act: Act::AppRetry });
-            g.fill_rrect(r, 16.0, Color::white((if hot(a, Act::AppRetry) { 1.0 } else { 0.92 }) * ca));
-            g.text("Try again", r, &f.small, Color(0.0, 0.0, 0.0, ca), Align::Center);
+            card_tile(
+                a,
+                ca,
+                hits,
+                Rect::new(24.0, 66.0, 552.0, 56.0),
+                Some(Act::AppRetry),
+                '\u{E72C}',
+                C_MEM,
+                "Windows is taking longer than usual",
+                T1,
+                "Click to scan your Start menu apps again",
+                T3,
+                None,
+                false,
+                false,
+            );
         } else {
-            spinner(g, EXP_W / 2.0, 100.0, 16.0, a.spin_t, a.accent, ca);
-            g.text("Finding your apps\u{2026}", Rect::new(0.0, 126.0, EXP_W, 22.0), &f.small, T2.fade(ca), Align::Center);
+            spinner(g, EXP_W / 2.0, 96.0, 15.0, a.spin_t, C_CPU, ca);
+            g.text("Finding your apps\u{2026}", Rect::new(0.0, 124.0, EXP_W, 22.0), &f.small, T2.fade(ca), Align::Center);
         }
         return;
     };
+
     let view = a.app_view();
     if view.is_empty() {
-        g.text(
-            if a.app_filter.is_empty() { "No apps found" } else { "No apps match that search" },
-            Rect::new(0.0, 90.0, EXP_W, 24.0),
-            &f.body,
-            T3.fade(ca),
-            Align::Center,
+        let (l1, l2) = if a.app_filter.is_empty() {
+            ("No apps found", "Click refresh to scan installed Windows apps")
+        } else {
+            ("No apps match that search", "Press Esc in search to clear the filter")
+        };
+        card_tile(
+            a,
+            ca,
+            hits,
+            Rect::new(24.0, 66.0, 552.0, 56.0),
+            Some(Act::AppRefresh),
+            '\u{E721}',
+            C_CPU,
+            l1,
+            T1,
+            l2,
+            T3,
+            None,
+            false,
+            false,
         );
         return;
     }
+
+    // 4 compact borderless matte rows (37px tall, r = 14.0, 25x25 circular badge)
     for row in 0..PICK_ROWS {
         let idx = a.app_scroll + row;
         let Some((name, id)) = view.get(idx) else { break };
-        let r = Rect::new(list.x, list.y + row as f32 * 32.0, list.w - 10.0, 28.0);
+        let r = Rect::new(24.0, 34.0 + row as f32 * 41.0, EXP_W - 48.0, 37.0);
         let target = format!("shell:AppsFolder\\{id}");
         let pinned = a.apps.iter().any(|p| p.target == target);
         let act = Act::AppPick(idx);
         if !pinned {
             hits.push(Hit { r, act });
         }
-        let on = hot(a, act) && !pinned;
-        g.fill_rrect(r, 10.0, Color::white((if on { 0.12 } else if row % 2 == 0 { 0.05 } else { 0.0 }) * ca));
-        let ic = Rect::new(r.x + 10.0, r.y + 3.0, 22.0, 22.0);
+        let k = if pinned { 0.0 } else { hot_k(a, act) };
+        g.fill_rrect(r, 14.0, Color::white((0.09 + 0.08 * k) * ca));
+
+        let hue = name_color(name);
+        let ic = Rect::new(r.x + 8.5, r.y + (r.h - 25.0) / 2.0, 25.0, 25.0);
+        g.fill_circle(ic.cx(), ic.cy(), 12.5, hue.fade(0.16 * ca));
         match a.picker_icons.iter().find(|(k, _)| k == id).and_then(|(_, b)| b.as_ref()) {
-            Some(bmp) => g.draw_bitmap(bmp, ic, 0.0, ca),
+            Some(bmp) => g.draw_bitmap(bmp, Rect::new(ic.cx() - 9.0, ic.cy() - 9.0, 18.0, 18.0), 3.0, ca),
             None => {
-                g.fill_circle(ic.cx(), ic.cy(), 11.0, name_color(name).fade(ca));
                 let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                g.text(&letter, ic, &f.tiny, Color(0.0, 0.0, 0.0, 0.75 * ca), Align::Center);
+                g.text(&letter, ic, &f.tiny, hue.fade(ca), Align::Center);
             }
         }
-        g.text(name, Rect::new(r.x + 44.0, r.y, r.w - 150.0, r.h), &f.body, (if pinned { T3 } else { T1 }).fade(ca), Align::Left);
-        let (label, col) = if pinned { ("\u{2713} Pinned", T3) } else if on { ("Pin to panel", a.accent) } else { ("", T3) };
-        g.text(label, Rect::new(r.x + r.w - 130.0, r.y, 120.0, r.h), &f.small, col.fade(ca), Align::Right);
+
+        let on = hot(a, act) && !pinned;
+        let pill_w = if pinned { 70.0 } else if on { 84.0 } else { 0.0 };
+        if pill_w > 0.0 {
+            let pr = Rect::new(r.x + r.w - 10.0 - pill_w, r.y + 7.5, pill_w, 22.0);
+            let pcol = if pinned { C_BAT } else { C_CPU };
+            g.fill_rrect(pr, 11.0, pcol.fade(0.16 * ca));
+            g.text(
+                if pinned { "Pinned" } else { "Pin app" },
+                pr,
+                &f.tiny,
+                pcol.fade(ca),
+                Align::Center,
+            );
+        }
+
+        let tx = r.x + 42.0;
+        let tw = (r.w - 54.0 - pill_w).max(60.0);
+        g.text(name, Rect::new(tx, r.y + 2.0, tw, 19.0), &f.small, (if pinned { T2 } else { T1 }).fade(ca), Align::Left);
+        let sub = if pinned { "Already pinned to Apps" } else { "Installed Windows app  \u{00B7}  Click to pin" };
+        g.text(sub, Rect::new(tx, r.y + 20.0, tw, 15.0), &f.tiny, T3.fade(ca), Align::Left);
     }
-    // a thin scroll bar when there is more than fits
+
     if view.len() > PICK_ROWS {
-        let track = Rect::new(list.x + list.w - 5.0, list.y, 3.0, PICK_ROWS as f32 * 32.0 - 4.0);
-        g.fill_rrect(track, 1.5, Color::white(0.08 * ca));
-        let hgt = track.h * PICK_ROWS as f32 / view.len() as f32;
-        let y = track.y + (track.h - hgt) * a.app_scroll as f32 / (view.len() - PICK_ROWS) as f32;
-        g.fill_rrect(Rect::new(track.x, y, 3.0, hgt), 1.5, Color::white(0.3 * ca));
+        let (top, h) = (34.0, PICK_ROWS as f32 * 41.0 - 4.0);
+        let track = Rect::new(EXP_W - 14.0, top, 4.0, h);
+        g.fill_rrect(track, 2.0, Color::white(0.07 * ca));
+        let thumb_h = (h * PICK_ROWS as f32 / view.len() as f32).max(18.0);
+        let frac = a.app_scroll as f32 / (view.len() - PICK_ROWS) as f32;
+        g.fill_rrect(
+            Rect::new(track.x, top + (h - thumb_h) * frac.clamp(0.0, 1.0), 4.0, thumb_h),
+            2.0,
+            C_CPU.fade(0.75 * ca),
+        );
     }
 }
 
@@ -1315,6 +1723,19 @@ fn page_tasks(a: &App, ca: f32, hits: &mut Vec<Hit>) {
 
 // ------------------------------------------------------------------ work ----
 
+/// Semantic Segoe Fluent / MDL2 icon glyph per Sprint Backlog status.
+fn work_status_glyph(status: &str) -> char {
+    match status.trim() {
+        "Completed" => '\u{E73E}',
+        "Working" => '\u{E916}',
+        "Overdue" | "For Hotfix" => '\u{E783}',
+        "Pending Review" | "For Release Tag" => '\u{E734}',
+        "On Hold" => '\u{E769}',
+        "Closed" | "Cancelled" => '\u{E711}',
+        _ => '\u{E8A5}',
+    }
+}
+
 fn page_work(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     if let Some(item) = a.work_current() {
         page_work_detail(a, item, ca, hits);
@@ -1328,57 +1749,53 @@ fn page_work_list(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     let f = &g.fonts;
     let view = a.work_view();
 
-    // Header row: title + count, All/Mine chip, search box, spinning refresh
+    // Header row: calm title + count, borderless All/Mine chip, search pill, refresh circle
     let head = if a.work_items.is_empty() {
         "Sprint Backlogs".to_string()
     } else {
         format!("Sprint Backlogs  \u{00B7}  {}", view.len())
     };
-    g.text(&head, Rect::new(26.0, 4.0, 180.0, 24.0), &f.small, a.accent.fade(ca), Align::Left);
+    g.text(&head, Rect::new(26.0, 3.0, 168.0, 24.0), &f.small, T2.fade(ca), Align::Left);
 
     if !a.work_items.is_empty() {
-        let scope = Rect::new(196.0, 5.0, 56.0, 22.0);
+        let scope = Rect::new(192.0, 4.0, 54.0, 22.0);
         hits.push(Hit { r: scope, act: Act::WorkScopeToggle });
         let on = a.work_mine_only;
-        g.fill_rrect(
-            scope,
-            11.0,
-            (if on {
-                a.accent.fade(0.24)
-            } else if hot(a, Act::WorkScopeToggle) {
-                Color::white(0.12)
-            } else {
-                Color::white(0.06)
-            })
-            .fade(ca),
-        );
+        let bg = if on {
+            C_CPU.fade(0.18)
+        } else if hot(a, Act::WorkScopeToggle) {
+            HOVER
+        } else {
+            SURF
+        };
+        g.fill_rrect(scope, 11.0, bg.fade(ca));
         g.text(
             if on { "Mine" } else { "All" },
             scope,
             &f.tiny,
-            (if on { a.accent } else { T2 }).fade(ca),
+            (if on { C_CPU } else { T2 }).fade(ca),
             Align::Center,
         );
     }
 
-    // Refresh button
-    let rf = Rect::new(EXP_W - 50.0, 4.0, 26.0, 24.0);
+    // Refresh button (borderless SURF -> HOVER)
+    let rf = Rect::new(EXP_W - 50.0, 3.0, 26.0, 24.0);
     hits.push(Hit { r: rf, act: Act::WorkRefresh });
-    g.fill_rrect(rf, 12.0, Color::white((if hot(a, Act::WorkRefresh) { 0.14 } else { 0.06 }) * ca));
+    g.fill_rrect(rf, 12.0, (if hot(a, Act::WorkRefresh) { HOVER } else { SURF }).fade(ca));
     let deg = if a.work_loading { a.spin_t * 360.0 } else { 0.0 };
     g.rotated(rf.cx(), rf.cy(), deg, || {
-        g.icon('\u{E72C}', rf, &f.icon14, (if a.work_loading { a.accent } else { T2 }).fade(ca))
+        g.icon('\u{E72C}', rf, &f.icon14, (if a.work_loading { C_CPU } else { T2 }).fade(ca))
     });
 
-    // Search box
-    let sr = Rect::new(EXP_W - 210.0, 4.0, 152.0, 24.0);
+    // Search pill (borderless SURF -> HOVER)
+    let sr = Rect::new(EXP_W - 212.0, 3.0, 154.0, 24.0);
     let typing = a.entry_search && a.work_drop.is_none();
     if typing || !a.work_filter.is_empty() {
         let mut t = a.work_filter.clone();
         if typing {
             t.push('\u{2502}');
         }
-        g.fill_rrect(sr, 12.0, Color::white(0.14 * ca));
+        g.fill_rrect(sr, 12.0, HOVER.fade(ca));
         g.text(&t, Rect::new(sr.x + 10.0, sr.y, sr.w - 30.0, sr.h), &f.small, T1.fade(ca), Align::Left);
         if !typing {
             let x = Rect::new(sr.x + sr.w - 24.0, sr.y, 24.0, sr.h);
@@ -1388,86 +1805,151 @@ fn page_work_list(a: &App, ca: f32, hits: &mut Vec<Hit>) {
         }
     } else {
         hits.push(Hit { r: sr, act: Act::WorkSearch });
-        g.fill_rrect(sr, 12.0, Color::white((if hot(a, Act::WorkSearch) { 0.11 } else { 0.06 }) * ca));
-        g.icon('\u{E721}', Rect::new(sr.x + 4.0, sr.y, 22.0, sr.h), &f.icon14, T3.fade(ca));
-        g.text("Search tasks", Rect::new(sr.x + 28.0, sr.y, sr.w - 32.0, sr.h), &f.small, T3.fade(ca), Align::Left);
+        g.fill_rrect(sr, 12.0, (if hot(a, Act::WorkSearch) { HOVER } else { SURF }).fade(ca));
+        g.icon('\u{E721}', Rect::new(sr.x + 6.0, sr.y, 22.0, sr.h), &f.icon14, T3.fade(ca));
+        g.text("Search tasks", Rect::new(sr.x + 29.0, sr.y, sr.w - 34.0, sr.h), &f.small, T3.fade(ca), Align::Left);
     }
 
     // Loading / error / empty states
     if a.work_loading && a.work_items.is_empty() {
-        spinner(g, EXP_W / 2.0, 96.0, 15.0, a.spin_t, a.accent, ca);
+        spinner(g, EXP_W / 2.0, 96.0, 15.0, a.spin_t, C_CPU, ca);
         g.text("Syncing Sprint Backlogs\u{2026}", Rect::new(0.0, 124.0, EXP_W, 22.0), &f.small, T2.fade(ca), Align::Center);
         return;
     }
 
     if let Some(err) = &a.work_error {
         if a.work_items.is_empty() {
-            g.icon('\u{E783}', Rect::new(EXP_W / 2.0 - 18.0, 52.0, 36.0, 32.0), &f.icon22, Color(1.0, 0.45, 0.42, ca));
-            g.text(err, Rect::new(36.0, 88.0, EXP_W - 72.0, 22.0), &f.small, T1.fade(ca), Align::Center);
-            let b1 = Rect::new(EXP_W / 2.0 - 126.0, 122.0, 118.0, 30.0);
-            let b2 = Rect::new(EXP_W / 2.0 + 8.0, 122.0, 96.0, 30.0);
-            hits.push(Hit { r: b1, act: Act::WorkOpenConfig });
-            hits.push(Hit { r: b2, act: Act::WorkRefresh });
-            g.fill_rrect(b1, 15.0, Color::white((if hot(a, Act::WorkOpenConfig) { 0.18 } else { 0.10 }) * ca));
-            g.text("Edit config.ini", b1, &f.small, T1.fade(ca), Align::Center);
-            g.fill_rrect(b2, 15.0, a.accent.fade((if hot(a, Act::WorkRefresh) { 0.95 } else { 0.80 }) * ca));
-            g.text("Retry", b2, &f.small, Color(0.0, 0.0, 0.0, ca), Align::Center);
+            // Controls-style status banner + 2-column action tiles
+            card_tile(
+                a,
+                ca,
+                hits,
+                Rect::new(24.0, 38.0, 552.0, 52.0),
+                None,
+                '\u{E783}',
+                Color(0.98, 0.45, 0.55, 1.0),
+                "ERPNext connection required",
+                T1,
+                err,
+                T3,
+                None,
+                false,
+                false,
+            );
+            card_tile(
+                a,
+                ca,
+                hits,
+                Rect::new(24.0, 98.0, 270.0, 54.0),
+                Some(Act::WorkOpenConfig),
+                '\u{E713}',
+                C_MEM,
+                "Configure ERPNext",
+                T1,
+                "Edit erp_url & erp_token in config.ini",
+                T3,
+                None,
+                false,
+                false,
+            );
+            card_tile(
+                a,
+                ca,
+                hits,
+                Rect::new(306.0, 98.0, 270.0, 54.0),
+                Some(Act::WorkRefresh),
+                '\u{E72C}',
+                C_CPU,
+                "Retry sync",
+                T1,
+                "Reconnect to Sprint Backlogs",
+                T3,
+                None,
+                false,
+                false,
+            );
             return;
         }
     }
 
     if view.is_empty() {
         let (l1, l2) = if !a.work_filter.is_empty() {
-            ("No Sprint Backlogs match your filter.", "Press Esc in search or click \u{00D7} to clear.")
+            ("No Sprint Backlogs match your filter", "Press Esc in search or click \u{00D7} to clear")
         } else if a.work_mine_only {
-            ("No Sprint Backlogs currently assigned to you.", "Click 'Mine' above to switch back to 'All'.")
+            ("No Sprint Backlogs assigned to you", "Click 'Mine' above to view all tasks")
         } else {
-            ("No Sprint Backlogs found.", "Click the refresh icon to check ERPNext.")
+            ("No Sprint Backlogs found", "Click refresh to check ERPNext")
         };
-        g.text(l1, Rect::new(0.0, 82.0, EXP_W, 24.0), &f.body, T2.fade(ca), Align::Center);
-        g.text(l2, Rect::new(0.0, 106.0, EXP_W, 20.0), &f.small, T3.fade(ca), Align::Center);
+        card_tile(
+            a,
+            ca,
+            hits,
+            Rect::new(24.0, 68.0, 552.0, 56.0),
+            Some(Act::WorkRefresh),
+            '\u{E8A5}',
+            C_CPU,
+            l1,
+            T1,
+            l2,
+            T3,
+            None,
+            false,
+            false,
+        );
         return;
     }
 
-    // 4 stacked task bars matching the sketch
+    // 4 borderless Controls-style rows: tinted circular icon badge + 2-line hierarchy + soft status pill
     for row in 0..WORK_ROWS {
         let idx = a.work_scroll + row;
         let Some(item) = view.get(idx) else { break };
-        let r = Rect::new(24.0, 34.0 + row as f32 * 41.0, EXP_W - 48.0, 36.0);
+        let r = Rect::new(24.0, 34.0 + row as f32 * 41.0, EXP_W - 48.0, 37.0);
         let act = Act::WorkSelect(idx);
         hits.push(Hit { r, act });
         let k = hot_k(a, act);
         let scol = crate::work::status_color(&item.status);
 
-        g.fill_rrect(r, 10.0, Color::white((0.055 + 0.075 * k) * ca));
-        g.stroke_rrect(r, 10.0, Color::white((0.08 + 0.12 * k) * ca), 1.0);
-        // Coloured status bar along the left inside edge
-        g.fill_rrect(Rect::new(r.x + 5.0, r.y + 7.0, 3.0, r.h - 14.0), 1.5, scol.fade(ca));
+        g.fill_rrect(r, 14.0, Color::white((0.09 + 0.08 * k) * ca));
 
-        // SPB ID badge
-        g.text(&item.name, Rect::new(r.x + 14.0, r.y, 68.0, r.h), &f.tiny, T2.fade(ca), Align::Left);
+        // Soft tinted circular status icon badge on the left
+        let ic = Rect::new(r.x + 10.0, r.y + (r.h - 26.0) / 2.0, 26.0, 26.0);
+        g.fill_circle(ic.cx(), ic.cy(), 13.0, scol.fade(0.16 * ca));
+        g.icon(work_status_glyph(&item.status), ic, &f.icon14, scol.fade(ca));
 
-        // Status pill on the right + optional comment count
-        let cmt_w = if item.comments > 0 { 36.0 } else { 0.0 };
+        // Right-aligned borderless status pill + optional comment badge
+        let cmt_w = if item.comments > 0 { 38.0 } else { 0.0 };
         if item.comments > 0 {
-            let cr = Rect::new(r.x + r.w - 42.0, r.y + 7.0, 34.0, 22.0);
-            g.fill_rrect(cr, 11.0, Color::white(0.08 * ca));
-            g.text(&format!("{}", item.comments), cr, &f.tiny, T2.fade(ca), Align::Center);
+            let cr = Rect::new(r.x + r.w - 42.0, r.y + 7.5, 32.0, 22.0);
+            g.fill_rrect(cr, 11.0, C_UP.fade(0.15 * ca));
+            g.text(&format!("{}", item.comments), cr, &f.tiny, C_UP.fade(ca), Align::Center);
         }
         let pill_w = (item.status.chars().count() as f32 * 6.0 + 18.0).clamp(64.0, 112.0);
-        let pr = Rect::new(r.x + r.w - 10.0 - cmt_w - pill_w, r.y + 7.0, pill_w, 22.0);
-        g.fill_rrect(pr, 11.0, scol.fade(0.18 * ca));
-        g.stroke_rrect(pr, 11.0, scol.fade(0.42 * ca), 1.0);
+        let pr = Rect::new(r.x + r.w - 10.0 - cmt_w - pill_w, r.y + 7.5, pill_w, 22.0);
+        g.fill_rrect(pr, 11.0, scol.fade(0.15 * ca));
         g.text(&item.status, pr, &f.tiny, scol.fade(ca), Align::Center);
 
-        // Task Subject / Title
-        let title_x = r.x + 84.0;
-        let title_w = (pr.x - title_x - 10.0).max(60.0);
-        g.text(&item.subject, Rect::new(title_x, r.y, title_w, r.h), &f.body, T1.fade(ca), Align::Left);
+        // Two-line stacked title + metadata subtitle beside the circular icon badge
+        let tx = r.x + 46.0;
+        let tw = (pr.x - tx - 10.0).max(60.0);
+        g.text(&item.subject, Rect::new(tx, r.y + 2.0, tw, 19.0), &f.small, T1.fade(ca), Align::Left);
+
+        let mut sub = item.name.clone();
+        if !item.current_assignee.is_empty() {
+            sub.push_str("  \u{00B7}  ");
+            sub.push_str(&a.work_user_label(&item.current_assignee));
+        } else if !item.priority.is_empty() {
+            sub.push_str("  \u{00B7}  ");
+            sub.push_str(&item.priority);
+        }
+        if !item.sprint.is_empty() {
+            sub.push_str("  \u{00B7}  ");
+            sub.push_str(&item.sprint);
+        }
+        g.text(&sub, Rect::new(tx, r.y + 20.0, tw, 15.0), &f.tiny, T3.fade(ca), Align::Left);
     }
 
     if view.len() > WORK_ROWS {
-        let (top, h) = (34.0, WORK_ROWS as f32 * 41.0 - 5.0);
+        let (top, h) = (34.0, WORK_ROWS as f32 * 41.0 - 4.0);
         let track = Rect::new(EXP_W - 16.0, top, 4.0, h);
         g.fill_rrect(track, 2.0, Color::white(0.07 * ca));
         let thumb_h = (h * WORK_ROWS as f32 / view.len() as f32).max(18.0);
@@ -1475,7 +1957,7 @@ fn page_work_list(a: &App, ca: f32, hits: &mut Vec<Hit>) {
         g.fill_rrect(
             Rect::new(track.x, top + (h - thumb_h) * frac.clamp(0.0, 1.0), 4.0, thumb_h),
             2.0,
-            a.accent.fade(0.8 * ca),
+            C_CPU.fade(0.8 * ca),
         );
     }
 }
@@ -1483,13 +1965,35 @@ fn page_work_list(a: &App, ca: f32, hits: &mut Vec<Hit>) {
 fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mut Vec<Hit>) {
     let g = &a.gfx;
     let f = &g.fonts;
+    let scol = crate::work::status_color(&item.status);
 
-    // ---- Top navigation strip: Back + ID/Sprint metadata + Save/Refresh status
-    let back = Rect::new(24.0, 0.0, 62.0, 22.0);
+    // ---- Top navigation strip: borderless Back chip + Save/Toast status + Refresh circle
+    let back = Rect::new(24.0, 0.0, 64.0, 22.0);
     hits.push(Hit { r: back, act: Act::WorkBack });
-    g.fill_rrect(back, 11.0, Color::white((if hot(a, Act::WorkBack) { 0.16 } else { 0.08 }) * ca));
-    g.text("\u{2039} Back", back, &f.tiny, T1.fade(ca), Align::Center);
+    g.fill_rrect(back, 11.0, (if hot(a, Act::WorkBack) { HOVER } else { SURF }).fade(ca));
+    g.icon('\u{E76B}', Rect::new(back.x + 6.0, back.y, 16.0, back.h), &f.icon14, T2.fade(ca));
+    g.text("Back", Rect::new(back.x + 22.0, back.y, 36.0, back.h), &f.tiny, T1.fade(ca), Align::Left);
 
+    let rf = Rect::new(EXP_W - 48.0, 0.0, 24.0, 22.0);
+    hits.push(Hit { r: rf, act: Act::WorkRefresh });
+    g.fill_rrect(rf, 11.0, (if hot(a, Act::WorkRefresh) { HOVER } else { SURF }).fade(ca));
+    let deg = if a.work_loading { a.spin_t * 360.0 } else { 0.0 };
+    g.rotated(rf.cx(), rf.cy(), deg, || {
+        g.icon('\u{E72C}', rf, &f.icon14, (if hot(a, Act::WorkRefresh) { T1 } else { T2 }).fade(ca))
+    });
+
+    if a.work_saving {
+        spinner(g, EXP_W - 118.0, 11.0, 5.5, a.spin_t, C_CPU, ca);
+        g.text("Saving\u{2026}", Rect::new(EXP_W - 106.0, 0.0, 54.0, 22.0), &f.tiny, C_CPU.fade(ca), Align::Left);
+    } else if let Some((msg, ok, t0)) = &a.work_toast {
+        if t0.elapsed().as_secs_f32() < 4.0 {
+            let tc = if *ok { C_BAT } else { Color(0.98, 0.45, 0.55, 1.0) };
+            let label = if *ok { format!("\u{2713} {msg}") } else { ellipsize(msg, 28) };
+            g.text(&label, Rect::new(EXP_W - 240.0, 0.0, 184.0, 22.0), &f.tiny, tc.fade(ca), Align::Right);
+        }
+    }
+
+    // ---- Row 1: Full-width Backlog Overview Tile (24..576, matches 2-column grid edges)
     let mut meta = item.name.clone();
     if !item.priority.is_empty() {
         meta.push_str("  \u{00B7}  ");
@@ -1499,182 +2003,172 @@ fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mu
         meta.push_str("  \u{00B7}  ");
         meta.push_str(&item.sprint);
     }
-    g.text(&meta, Rect::new(94.0, 0.0, 320.0, 22.0), &f.tiny, T3.fade(ca), Align::Left);
-
-    let rf = Rect::new(EXP_W - 48.0, 0.0, 24.0, 22.0);
-    hits.push(Hit { r: rf, act: Act::WorkRefresh });
-    let deg = if a.work_loading { a.spin_t * 360.0 } else { 0.0 };
-    g.rotated(rf.cx(), rf.cy(), deg, || {
-        g.icon('\u{E72C}', rf, &f.icon14, (if hot(a, Act::WorkRefresh) { T1 } else { T3 }).fade(ca))
-    });
-
-    if a.work_saving {
-        spinner(g, EXP_W - 118.0, 11.0, 5.5, a.spin_t, a.accent, ca);
-        g.text("Saving\u{2026}", Rect::new(EXP_W - 106.0, 0.0, 54.0, 22.0), &f.tiny, a.accent.fade(ca), Align::Left);
-    } else if let Some((msg, ok, t0)) = &a.work_toast {
-        if t0.elapsed().as_secs_f32() < 4.0 {
-            let tc = if *ok { Color(0.35, 0.88, 0.55, 1.0) } else { Color(1.0, 0.45, 0.42, 1.0) };
-            let label = if *ok { format!("\u{2713} {msg}") } else { ellipsize(msg, 24) };
-            g.text(&label, Rect::new(EXP_W - 214.0, 0.0, 160.0, 22.0), &f.tiny, tc.fade(ca), Align::Right);
-        }
-    }
-
-    // ---- 1. Top full-width Title box
-    let title_box = Rect::new(24.0, 26.0, EXP_W - 48.0, 46.0);
-    g.fill_rrect(title_box, 12.0, Color::white(0.065 * ca));
-    g.stroke_rrect(title_box, 12.0, Color::white(0.12 * ca), 1.0);
-    g.text_wrap(
+    card_tile(
+        a,
+        ca,
+        hits,
+        Rect::new(24.0, 28.0, 552.0, 50.0),
+        None,
+        '\u{E8A5}',
+        C_MEM,
         &item.subject,
-        Rect::new(title_box.x + 14.0, title_box.y + 4.0, title_box.w - 28.0, title_box.h - 8.0),
-        &f.menu,
-        T1.fade(ca),
-        Align::Left,
+        T1,
+        &meta,
+        T3,
+        None,
+        false,
+        false,
     );
 
-    // ---- 2. Middle-left `current_assignee` box (searchable Frappe Link)
-    let asg_box = Rect::new(24.0, 80.0, 270.0, 44.0);
+    // ---- Row 2: 2-Column Controls Grid (Assignee & Status, 270x50 each, 12px gap)
+    let asg_box = Rect::new(24.0, 86.0, 270.0, 50.0);
     let asg_open = a.work_drop == Some(WorkDrop::Assignee);
-    hits.push(Hit { r: asg_box, act: Act::WorkAssignee });
-    let asg_k = hot_k(a, Act::WorkAssignee);
-    g.fill_rrect(asg_box, 11.0, Color::white((if asg_open { 0.13 } else { 0.06 + 0.06 * asg_k }) * ca));
-    g.stroke_rrect(
-        asg_box,
-        11.0,
-        (if asg_open { a.accent } else { Color::white(0.13 + 0.14 * asg_k) }).fade(ca),
-        if asg_open { 1.4 } else { 1.0 },
-    );
-    g.text(
-        "Current Assignee",
-        Rect::new(asg_box.x + 12.0, asg_box.y + 3.0, asg_box.w - 36.0, 14.0),
-        &f.tiny,
-        (if asg_open { a.accent } else { T3 }).fade(ca),
-        Align::Left,
-    );
     let asg_label = a.work_user_label(&item.current_assignee);
-    let av = Rect::new(asg_box.x + 12.0, asg_box.y + 19.0, 18.0, 18.0);
-    let av_col = if item.current_assignee.is_empty() { T3 } else { name_color(&asg_label) };
-    g.fill_circle(av.cx(), av.cy(), 9.0, av_col.fade(0.85 * ca));
-    let initial: String = asg_label.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "-".into());
-    g.text(&initial, av, &f.tiny, Color(0.0, 0.0, 0.0, 0.85 * ca), Align::Center);
-
-    let (asg_txt, asg_tc) = if asg_open {
+    let asg_tint = if item.current_assignee.is_empty() { C_CPU } else { name_color(&asg_label) };
+    let (asg_title, asg_tc) = if asg_open {
         if a.work_drop_query.is_empty() {
-            (format!("Search user\u{2026}\u{2502}"), T2)
+            ("Search user\u{2026}\u{2502}".to_string(), T2)
         } else {
             (format!("{}\u{2502}", a.work_drop_query), T1)
         }
     } else if item.current_assignee.is_empty() {
-        ("Unassigned".to_string(), T3)
+        ("Unassigned".to_string(), T2)
     } else {
         (asg_label, T1)
     };
-    g.text(
-        &asg_txt,
-        Rect::new(asg_box.x + 36.0, asg_box.y + 17.0, asg_box.w - 64.0, 22.0),
-        &f.small,
-        asg_tc.fade(ca),
-        Align::Left,
-    );
-    g.icon(
-        if asg_open { '\u{E721}' } else { '\u{E70D}' },
-        Rect::new(asg_box.x + asg_box.w - 28.0, asg_box.y + 14.0, 22.0, 24.0),
-        &f.icon14,
-        (if asg_open { a.accent } else { T3 }).fade(ca),
+    let (asg_sub, asg_sc) = if asg_open {
+        ("Type to search \u{00B7} Esc to close", asg_tint)
+    } else {
+        ("Current assignee", T3)
+    };
+    card_tile(
+        a,
+        ca,
+        hits,
+        asg_box,
+        Some(Act::WorkAssignee),
+        if asg_open { '\u{E721}' } else { '\u{E77B}' },
+        asg_tint,
+        &asg_title,
+        asg_tc,
+        asg_sub,
+        asg_sc,
+        Some(('\u{E70D}', if asg_open { asg_tint } else { T3 })),
+        asg_open,
+        false,
     );
 
-    // ---- 3. Middle-right `status` box (searchable Frappe Select)
-    let st_box = Rect::new(306.0, 80.0, 270.0, 44.0);
+    let st_box = Rect::new(306.0, 86.0, 270.0, 50.0);
     let st_open = a.work_drop == Some(WorkDrop::Status);
-    let scol = crate::work::status_color(&item.status);
-    hits.push(Hit { r: st_box, act: Act::WorkStatus });
-    let st_k = hot_k(a, Act::WorkStatus);
-    g.fill_rrect(st_box, 11.0, Color::white((if st_open { 0.13 } else { 0.06 + 0.06 * st_k }) * ca));
-    g.stroke_rrect(
-        st_box,
-        11.0,
-        (if st_open { scol } else { Color::white(0.13 + 0.14 * st_k) }).fade(ca),
-        if st_open { 1.4 } else { 1.0 },
-    );
-    g.text(
-        "Status",
-        Rect::new(st_box.x + 12.0, st_box.y + 3.0, st_box.w - 36.0, 14.0),
-        &f.tiny,
-        (if st_open { scol } else { T3 }).fade(ca),
-        Align::Left,
-    );
-    g.fill_circle(st_box.x + 19.0, st_box.y + 28.0, 5.0, scol.fade(ca));
-    let (st_txt, st_tc) = if st_open {
+    let (st_title, st_tc) = if st_open {
         if a.work_drop_query.is_empty() {
-            (format!("Filter status\u{2026}\u{2502}"), T2)
+            ("Filter status\u{2026}\u{2502}".to_string(), T2)
         } else {
             (format!("{}\u{2502}", a.work_drop_query), T1)
         }
     } else {
         (item.status.clone(), T1)
     };
-    g.text(
-        &st_txt,
-        Rect::new(st_box.x + 32.0, st_box.y + 17.0, st_box.w - 60.0, 22.0),
-        &f.small,
-        st_tc.fade(ca),
-        Align::Left,
+    let (st_sub, st_sc) = if st_open {
+        ("Type to filter \u{00B7} Esc to close", scol)
+    } else {
+        ("Task status", T3)
+    };
+    card_tile(
+        a,
+        ca,
+        hits,
+        st_box,
+        Some(Act::WorkStatus),
+        if st_open { '\u{E721}' } else { work_status_glyph(&item.status) },
+        scol,
+        &st_title,
+        st_tc,
+        st_sub,
+        st_sc,
+        Some(('\u{E70D}', if st_open { scol } else { T3 })),
+        st_open,
+        false,
     );
-    g.icon(
-        if st_open { '\u{E721}' } else { '\u{E70D}' },
-        Rect::new(st_box.x + st_box.w - 28.0, st_box.y + 14.0, 22.0, 24.0),
-        &f.icon14,
-        (if st_open { scol } else { T3 }).fade(ca),
-    );
 
-    // ---- 4. Bottom-center `click redirect` button (opens Sprint Backlog in ERPNext)
-    let redir = Rect::new(EXP_W / 2.0 - 98.0, 148.0, 196.0, 38.0);
-    hits.push(Hit { r: redir, act: Act::WorkOpenBrowser });
-    let rk = hot_k(a, Act::WorkOpenBrowser);
-    g.fill_rrect(redir, 12.0, a.accent.fade((0.18 + 0.14 * rk) * ca));
-    g.stroke_rrect(redir, 12.0, a.accent.fade((0.45 + 0.35 * rk) * ca), 1.0);
-    g.text("Open in ERPNext", Rect::new(redir.x + 16.0, redir.y, redir.w - 44.0, redir.h), &f.small, T1.fade(ca), Align::Center);
-    g.icon('\u{E8A7}', Rect::new(redir.x + redir.w - 34.0, redir.y, 24.0, redir.h), &f.icon14, a.accent.fade(ca));
+    // ---- Row 3: 2-Column Action Tiles (hidden directly beneath an open dropdown so short lists never clip)
+    if !asg_open {
+        let open_sub = format!("View {} in browser", item.name);
+        card_tile(
+            a,
+            ca,
+            hits,
+            Rect::new(24.0, 144.0, 270.0, 50.0),
+            Some(Act::WorkOpenBrowser),
+            '\u{E8A7}',
+            C_CPU,
+            "Open in ERPNext",
+            T1,
+            &open_sub,
+            T3,
+            None,
+            false,
+            false,
+        );
+    }
 
-    // ---- 5. Bottom-right `Comments No.` circle badge
-    let (ccx, ccy, cr) = (EXP_W - 46.0, 167.0, 19.0);
-    let cbox = Rect::new(ccx - cr, ccy - cr, cr * 2.0, cr * 2.0);
-    hits.push(Hit { r: cbox, act: Act::WorkOpenComments });
-    let ck = hot_k(a, Act::WorkOpenComments);
-    g.fill_circle(ccx, ccy, cr, Color::white((0.09 + 0.09 * ck) * ca));
-    g.stroke_rrect(cbox, cr, (if ck > 0.1 { a.accent } else { Color::white(0.22) }).fade(ca), 1.2);
-    g.text(&format!("{}", item.comments), cbox, &f.menu, T1.fade(ca), Align::Center);
-    g.icon('\u{E8BD}', Rect::new(ccx - cr - 22.0, ccy - 10.0, 20.0, 20.0), &f.icon14, T3.fade(ca));
+    if !st_open {
+        let cmt_title = match item.comments {
+            0 => "No comments".to_string(),
+            1 => "1 comment".to_string(),
+            n => format!("{n} comments"),
+        };
+        let cmt_sub = if item.comments == 0 {
+            "Open activity & start discussion"
+        } else {
+            "Open discussion & activity"
+        };
+        card_tile(
+            a,
+            ca,
+            hits,
+            Rect::new(306.0, 144.0, 270.0, 50.0),
+            Some(Act::WorkOpenComments),
+            '\u{E8BD}',
+            C_UP,
+            &cmt_title,
+            T1,
+            cmt_sub,
+            T3,
+            None,
+            false,
+            false,
+        );
+    }
 
-    // ---- Searchable Dropdown Overlay (drawn last so it sits above bottom controls)
+    // ---- Searchable Dropdown Overlay (drawn last so it floats cleanly above Row 3)
     if let Some(kind) = a.work_drop {
         hits.push(Hit {
             r: Rect::new(0.0, 0.0, EXP_W, EXP_H - CONTENT_Y),
             act: Act::WorkCloseDrop,
         });
-        // Keep both field headers directly clickable above the backdrop
         hits.push(Hit { r: asg_box, act: Act::WorkAssignee });
         hits.push(Hit { r: st_box, act: Act::WorkStatus });
 
         let opts = a.work_drop_options_for(kind);
-        let row_h = 23.5;
+        let row_h = 21.5;
         let vis_rows = opts.len().clamp(1, WORK_DROP_ROWS);
         let drop_h = 6.0 + vis_rows as f32 * row_h;
         let drop_r = match kind {
-            WorkDrop::Assignee => Rect::new(24.0, 126.0, 304.0, drop_h),
-            WorkDrop::Status => Rect::new(306.0, 126.0, 270.0, drop_h),
+            WorkDrop::Assignee => Rect::new(24.0, 136.5, 270.0, drop_h),
+            WorkDrop::Status => Rect::new(306.0, 136.5, 270.0, drop_h),
         };
-        // Solid dark backdrop + surface so underlying controls never bleed through
-        g.fill_rrect(drop_r, 11.0, Color(0.0, 0.0, 0.0, ca));
-        g.fill_rrect(drop_r, 11.0, Color(0.09, 0.095, 0.115, ca));
-        let border_col = match kind {
-            WorkDrop::Assignee => a.accent,
+        // Borderless matte dark surface
+        g.fill_rrect(drop_r, 16.0, BLACK.fade(ca));
+        g.fill_rrect(drop_r, 16.0, Color::white(0.11 * ca));
+        let accent_col = match kind {
+            WorkDrop::Assignee => asg_tint,
             WorkDrop::Status => scol,
         };
-        g.stroke_rrect(drop_r, 11.0, border_col.fade(0.55 * ca), 1.2);
 
         if opts.is_empty() {
             if kind == WorkDrop::Assignee && a.work_searching {
-                spinner(g, drop_r.cx() - 48.0, drop_r.cy(), 5.0, a.spin_t, a.accent, ca);
+                spinner(g, drop_r.cx() - 48.0, drop_r.cy(), 5.0, a.spin_t, C_CPU, ca);
                 g.text("Searching users\u{2026}", drop_r, &f.small, T2.fade(ca), Align::Center);
             } else {
                 g.text("No matches", drop_r, &f.small, T3.fade(ca), Align::Center);
@@ -1683,13 +2177,13 @@ fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mu
             for row in 0..WORK_DROP_ROWS {
                 let idx = a.work_drop_scroll + row;
                 let Some((val, sub)) = opts.get(idx) else { break };
-                let rr = Rect::new(drop_r.x + 4.0, drop_r.y + 3.0 + row as f32 * row_h, drop_r.w - 13.0, row_h - 1.0);
+                let rr = Rect::new(drop_r.x + 4.0, drop_r.y + 2.5 + row as f32 * row_h, drop_r.w - 12.0, row_h - 1.0);
                 let oact = Act::WorkPickOption(idx);
                 hits.push(Hit { r: rr, act: oact });
                 let is_sel = idx == a.work_drop_sel;
                 let is_hot = hot(a, oact);
                 if is_hot || is_sel {
-                    g.fill_rrect(rr, 7.0, Color::white((if is_hot { 0.17 } else { 0.11 }) * ca));
+                    g.fill_rrect(rr, 9.0, Color::white((if is_hot { 0.16 } else { 0.10 }) * ca));
                 }
                 match kind {
                     WorkDrop::Assignee => {
@@ -1701,39 +2195,32 @@ fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mu
                         } else {
                             val.as_str()
                         };
+                        let dc = if val.is_empty() { T3 } else { name_color(title) };
+                        g.fill_circle(rr.x + 11.0, rr.cy(), 4.5, dc.fade(ca));
                         g.text(
                             title,
-                            Rect::new(rr.x + 8.0, rr.y, rr.w - 118.0, rr.h),
+                            Rect::new(rr.x + 22.0, rr.y, rr.w - 46.0, rr.h),
                             &f.small,
                             (if val.is_empty() { T2 } else { T1 }).fade(ca),
                             Align::Left,
                         );
-                        if !val.is_empty() && !sub.eq_ignore_ascii_case(val) {
-                            g.text(
-                                val,
-                                Rect::new(rr.x + rr.w - 112.0, rr.y, 90.0, rr.h),
-                                &f.tiny,
-                                T3.fade(ca),
-                                Align::Right,
-                            );
-                        }
                         if active {
-                            g.icon('\u{E73E}', Rect::new(rr.x + rr.w - 22.0, rr.y, 18.0, rr.h), &f.icon14, a.accent.fade(ca));
+                            g.icon('\u{E73E}', Rect::new(rr.x + rr.w - 22.0, rr.y, 18.0, rr.h), &f.icon14, accent_col.fade(ca));
                         }
                     }
                     WorkDrop::Status => {
                         let active = item.status.eq_ignore_ascii_case(val);
                         let oc = crate::work::status_color(val);
-                        g.fill_circle(rr.x + 12.0, rr.cy(), 4.5, oc.fade(ca));
-                        g.text(val, Rect::new(rr.x + 24.0, rr.y, rr.w - 48.0, rr.h), &f.small, T1.fade(ca), Align::Left);
+                        g.fill_circle(rr.x + 11.0, rr.cy(), 4.5, oc.fade(ca));
+                        g.text(val, Rect::new(rr.x + 22.0, rr.y, rr.w - 46.0, rr.h), &f.small, T1.fade(ca), Align::Left);
                         if active {
-                            g.icon('\u{E73E}', Rect::new(rr.x + rr.w - 24.0, rr.y, 20.0, rr.h), &f.icon14, oc.fade(ca));
+                            g.icon('\u{E73E}', Rect::new(rr.x + rr.w - 22.0, rr.y, 18.0, rr.h), &f.icon14, oc.fade(ca));
                         }
                     }
                 }
             }
             if opts.len() > WORK_DROP_ROWS {
-                let (top, h) = (drop_r.y + 7.0, drop_r.h - 14.0);
+                let (top, h) = (drop_r.y + 6.0, drop_r.h - 12.0);
                 let track = Rect::new(drop_r.x + drop_r.w - 6.0, top, 3.0, h);
                 g.fill_rrect(track, 1.5, Color::white(0.08 * ca));
                 let th = (h * WORK_DROP_ROWS as f32 / opts.len() as f32).max(14.0);
@@ -1741,11 +2228,11 @@ fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mu
                 g.fill_rrect(
                     Rect::new(track.x, top + (h - th) * frac.clamp(0.0, 1.0), 3.0, th),
                     1.5,
-                    border_col.fade(0.8 * ca),
+                    accent_col.fade(0.8 * ca),
                 );
             }
             if kind == WorkDrop::Assignee && a.work_searching {
-                spinner(g, drop_r.x + drop_r.w - 14.0, drop_r.y + 10.0, 4.0, a.spin_t, a.accent, ca);
+                spinner(g, drop_r.x + drop_r.w - 14.0, drop_r.y + 10.0, 4.0, a.spin_t, C_CPU, ca);
             }
         }
     }

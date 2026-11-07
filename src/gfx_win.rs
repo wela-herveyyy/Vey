@@ -303,6 +303,7 @@ impl Gfx {
         }
     }
 
+    #[allow(dead_code)]
     pub fn text_wrap(&self, s: &str, r: Rect, f: &IDWriteTextFormat, c: Color, align: Align) {
         if s.is_empty() || c.3 <= 0.003 {
             return;

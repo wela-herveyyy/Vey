@@ -1657,7 +1657,7 @@ impl BarWin {
         let mon = el.primary_monitor()?;
         let scale = mon.scale_factor();
         let attrs = Window::default_attributes()
-            .with_title("Nock bar")
+            .with_title("Vey bar")
             .with_decorations(false)
             .with_transparent(true)
             .with_window_level(WindowLevel::AlwaysOnTop)
@@ -1852,7 +1852,7 @@ impl App {
         let x = (anchor.cx() as f64 - POP_W as f64 / 2.0).clamp(4.0, (mon_w - POP_W as f64 - 4.0).max(4.0));
         let home = PhysicalPosition::new(mon.position().x + (x * k) as i32, mon.position().y + ((BAR_H + 4.0) as f64 * k) as i32);
         let attrs = Window::default_attributes()
-            .with_title("Nock dropdown")
+            .with_title("Vey dropdown")
             .with_decorations(false)
             .with_transparent(true)
             .with_window_level(WindowLevel::AlwaysOnTop)
@@ -2157,7 +2157,7 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         let attrs = Window::default_attributes()
-            .with_title("Nock")
+            .with_title("Vey")
             .with_decorations(false)
             .with_transparent(true)
             .with_window_level(WindowLevel::AlwaysOnTop)
@@ -2312,7 +2312,7 @@ pub fn run() {
         pop: None,
     };
     if let Err(e) = el.run_app(&mut app) {
-        eprintln!("nock: {e}");
+        eprintln!("vey: {e}");
     }
 }
 
