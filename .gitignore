@@ -3,3 +3,4 @@ Cargo.lock.bak
 *.zip
 installer/Output/
 packaging/linux/out/
+erp.local.ini

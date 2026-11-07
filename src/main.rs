@@ -24,6 +24,7 @@ mod media;
 #[cfg(windows)]
 mod radio;
 mod store;
+mod work;
 #[cfg(windows)]
 mod sys;
 #[cfg(windows)]

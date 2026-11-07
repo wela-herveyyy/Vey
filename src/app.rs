@@ -18,6 +18,7 @@ use crate::media::{self, Cmd, MediaState};
 use crate::radio::{self, Kind, Radios, Req};
 use crate::store::{self, AppEntry, Config, Todo};
 use crate::sys;
+use crate::work;
 
 // ------------------------------------------------------------------ layout
 
@@ -44,6 +45,14 @@ pub const SETTINGS_PAGES: [&str; 5] = [
     "ms-settings:",
 ];
 pub const CLIP_ROWS: usize = 5;
+pub const WORK_ROWS: usize = 4;
+pub const WORK_DROP_ROWS: usize = 3;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WorkDrop {
+    Assignee,
+    Status,
+}
 
 /// Posted once per display refresh while something animates (see `pump`).
 pub const WM_FRAME: u32 = 0x8000 + 12; // WM_APP + 12
@@ -128,15 +137,17 @@ pub enum Page {
     Shelf,
     Apps,
     Tasks,
+    Work,
     Game,
     Stats,
     Power,
 }
 
-pub const PAGES: [Page; 9] = [
+pub const PAGES: [Page; 10] = [
     Page::Media,
     Page::Controls,
     Page::Tasks,
+    Page::Work,
     Page::Stats,
     Page::Clipboard,
     Page::Shelf,
@@ -198,6 +209,20 @@ pub enum Act {
     ShelfItem(usize),
     ShelfDel(usize),
     ShelfClear,
+    /// Work tab (ERPNext Sprint Backlogs): list, detail, searchable status & assignee, redirect
+    WorkSelect(usize),
+    WorkBack,
+    WorkRefresh,
+    WorkOpenConfig,
+    WorkScopeToggle,
+    WorkSearch,
+    WorkSearchClear,
+    WorkAssignee,
+    WorkStatus,
+    WorkPickOption(usize),
+    WorkCloseDrop,
+    WorkOpenBrowser,
+    WorkOpenComments,
 }
 
 #[derive(Clone, Copy)]
@@ -443,6 +468,27 @@ pub struct App {
     /// minutes since the calendar link was fetched, and the meeting already announced
     cal_age: u16,
     cal_seen: Option<(i64, u8)>,
+    // work (ERPNext Sprint Backlogs)
+    pub work: work::Handle,
+    pub work_user: String,
+    pub work_items: Vec<work::BacklogItem>,
+    pub work_users: Vec<work::UserOpt>,
+    pub work_search_users: Vec<work::UserOpt>,
+    pub work_statuses: Vec<String>,
+    pub work_loading: bool,
+    pub work_searching: bool,
+    pub work_saving: bool,
+    pub work_error: Option<String>,
+    pub work_toast: Option<(String, bool, Instant)>,
+    pub work_last_sync: Option<Instant>,
+    pub work_filter: String,
+    pub work_mine_only: bool,
+    pub work_scroll: usize,
+    pub work_selected: Option<String>,
+    pub work_drop: Option<WorkDrop>,
+    pub work_drop_query: String,
+    pub work_drop_scroll: usize,
+    pub work_drop_sel: usize,
 }
 
 enum AlertAct {
@@ -588,12 +634,35 @@ impl App {
             cal_age: 60,
             cal_seen: None,
             active_min: 0,
+            work: work::start(hwnd.0 as isize),
+            work_user: String::new(),
+            work_items: Vec::new(),
+            work_users: Vec::new(),
+            work_search_users: Vec::new(),
+            work_statuses: work::DEFAULT_STATUSES.iter().map(|s| (*s).to_string()).collect(),
+            work_loading: false,
+            work_searching: false,
+            work_saving: false,
+            work_error: None,
+            work_toast: None,
+            work_last_sync: None,
+            work_filter: String::new(),
+            work_mine_only: false,
+            work_scroll: 0,
+            work_selected: None,
+            work_drop: None,
+            work_drop_query: String::new(),
+            work_drop_scroll: 0,
+            work_drop_sel: 0,
         };
         a.update_monitor();
         sys::watch_mic(hwnd.0 as isize);
         sys::watch_mic_sessions(hwnd.0 as isize);
         a.load_app_icons();
         a.load_shelf_icons();
+        if !hwnd.0.is_null() && !a.cfg.erp_url.is_empty() && !a.cfg.erp_token.is_empty() {
+            a.refresh_work(false);
+        }
         a.snap_tab();
         let (w, h) = a.target_size();
         a.sw = Spring::new(w);
@@ -939,6 +1008,7 @@ impl App {
                 Page::Game if self.hub.is_playing() => 16,
                 Page::Stats => 1000,
                 Page::Apps if self.picking && (self.app_list.is_none() || self.app_loading) => 33,
+                Page::Work if self.work_loading || self.work_searching || self.work_saving => 33,
                 _ => 0,
             }
         } else {
@@ -1174,9 +1244,16 @@ impl App {
         if on {
             if self.page == Page::Controls {
                 self.refresh_controls();
+            } else if self.page == Page::Work
+                && !self.work_loading
+                && self.work_last_sync.map_or(true, |t| t.elapsed().as_secs() > 120)
+            {
+                self.refresh_work(false);
             }
         } else {
             self.page_t = 1.0;
+            self.work_drop = None;
+            self.work_drop_query.clear();
             self.finish_entry(false, false);
             self.drag = None;
             self.seek_frac = None;
@@ -1705,6 +1782,23 @@ impl App {
                 self.clip_scroll = self.clip_scroll.saturating_sub(1);
             }
             self.render();
+        } else if self.page == Page::Work {
+            if let Some(kind) = self.work_drop {
+                let max = self.work_drop_options_for(kind).len().saturating_sub(WORK_DROP_ROWS);
+                self.work_drop_scroll = if delta < 0 {
+                    (self.work_drop_scroll + 1).min(max)
+                } else {
+                    self.work_drop_scroll.saturating_sub(1)
+                };
+            } else if self.work_selected.is_none() {
+                let max = self.work_view().len().saturating_sub(WORK_ROWS);
+                self.work_scroll = if delta < 0 {
+                    (self.work_scroll + 1).min(max)
+                } else {
+                    self.work_scroll.saturating_sub(1)
+                };
+            }
+            self.render();
         }
     }
 
@@ -1712,12 +1806,19 @@ impl App {
         if self.page == p {
             return;
         }
+        self.work_drop = None;
+        self.work_drop_query.clear();
         self.finish_entry(false, false);
         self.prev_page = self.page;
         self.page = p;
         self.page_t = if self.expanded { 0.0 } else { 1.0 };
         if p == Page::Controls {
             self.refresh_controls();
+        } else if p == Page::Work
+            && !self.work_loading
+            && self.work_last_sync.map_or(true, |t| t.elapsed().as_secs() > 120)
+        {
+            self.refresh_work(false);
         }
         if p != Page::Apps {
             self.picking = false;
@@ -1974,6 +2075,72 @@ impl App {
                 self.start_entry();
                 self.entry_timer = self.entering.is_some();
             }
+            Act::WorkSelect(i) => {
+                let picked = self.work_view().get(i).map(|it| it.name.clone());
+                if let Some(name) = picked {
+                    self.work_drop = None;
+                    self.work_drop_query.clear();
+                    self.finish_entry(false, true);
+                    self.work_selected = Some(name);
+                }
+            }
+            Act::WorkBack => {
+                self.work_drop = None;
+                self.work_drop_query.clear();
+                self.finish_entry(false, true);
+                self.work_selected = None;
+            }
+            Act::WorkRefresh => {
+                self.refresh_work(true);
+            }
+            Act::WorkOpenConfig => {
+                sys::open("notepad.exe", &format!("\"{}\"", store::config_path().display()));
+            }
+            Act::WorkScopeToggle => {
+                self.work_mine_only = !self.work_mine_only;
+                self.work_scroll = 0;
+            }
+            Act::WorkSearch => {
+                self.work_drop = None;
+                self.work_drop_query.clear();
+                self.start_entry();
+                if self.entering.is_some() {
+                    self.entry_search = true;
+                    self.entering = Some(self.work_filter.encode_utf16().collect());
+                }
+            }
+            Act::WorkSearchClear => {
+                self.work_filter.clear();
+                self.work_scroll = 0;
+            }
+            Act::WorkAssignee => self.open_work_drop(WorkDrop::Assignee),
+            Act::WorkStatus => self.open_work_drop(WorkDrop::Status),
+            Act::WorkPickOption(i) => {
+                let picked = self
+                    .work_drop
+                    .and_then(|k| self.work_drop_options_for(k).get(i).map(|(v, _)| (k, v.clone())));
+                self.work_drop = None;
+                self.work_drop_query.clear();
+                self.finish_entry(false, true);
+                if let Some((kind, val)) = picked {
+                    self.apply_work_option(kind, &val);
+                }
+            }
+            Act::WorkCloseDrop => {
+                self.work_drop = None;
+                self.work_drop_query.clear();
+                self.finish_entry(false, true);
+            }
+            Act::WorkOpenBrowser | Act::WorkOpenComments => {
+                if let Some(item) = self.work_current() {
+                    let url = work::backlog_browser_url(&self.cfg.erp_url, &item.name);
+                    if !url.is_empty() {
+                        sys::open(&url, "");
+                        self.pinned = false;
+                        self.set_expanded(false);
+                    }
+                }
+            }
         }
     }
 
@@ -2095,7 +2262,10 @@ impl App {
         self.entry_timer = false;
         self.entry_search = false;
         unsafe {
-            self.prev_fg = GetForegroundWindow();
+            let fg = GetForegroundWindow();
+            if fg != self.hwnd {
+                self.prev_fg = fg;
+            }
         }
         self.entering = Some(Vec::new());
         self.make_activatable(true);
@@ -2109,20 +2279,38 @@ impl App {
     /// window that had it before.
     pub fn finish_entry(&mut self, commit: bool, refocus: bool) {
         let Some(buf) = self.entering.take() else {
+            self.work_drop = None;
+            self.work_drop_query.clear();
             return;
         };
         self.make_activatable(false);
         let timer = std::mem::take(&mut self.entry_timer);
         let search = std::mem::take(&mut self.entry_search);
-        if search && !commit {
+        let was_drop = self.work_drop.take();
+        let drop_commit = was_drop.and_then(|kind| {
+            if commit {
+                self.work_drop_options_for(kind)
+                    .get(self.work_drop_sel)
+                    .map(|(v, _)| (kind, v.clone()))
+            } else {
+                None
+            }
+        });
+        self.work_drop_query.clear();
+        if search && !commit && was_drop.is_none() {
             // Esc drops the filter; Enter keeps it
-            if self.page == Page::Apps {
+            if self.page == Page::Work {
+                self.work_filter.clear();
+                self.work_scroll = 0;
+            } else if self.page == Page::Apps {
                 self.app_filter.clear();
             } else {
                 self.clip_filter.clear();
             }
         }
-        if commit && timer {
+        if let Some((kind, val)) = drop_commit {
+            self.apply_work_option(kind, &val);
+        } else if commit && timer {
             let mins = String::from_utf16_lossy(&buf).parse::<u32>().unwrap_or(0).min(600);
             if mins > 0 {
                 self.timer_task = None;
@@ -2186,7 +2374,29 @@ impl App {
         if self.entry_search {
             if let Some(buf) = &self.entering {
                 let t = String::from_utf16_lossy(buf);
-                if self.page == Page::Apps {
+                if let Some(kind) = self.work_drop {
+                    let changed = self.work_drop_query != t;
+                    self.work_drop_query = t.clone();
+                    if changed {
+                        self.work_drop_scroll = 0;
+                        self.work_drop_sel = 0;
+                        if kind == WorkDrop::Assignee
+                            && !self.cfg.erp_url.is_empty()
+                            && !self.cfg.erp_token.is_empty()
+                        {
+                            self.work_searching = true;
+                            let _ = self.work.tx.send(work::Req::SearchUsers {
+                                url: self.cfg.erp_url.clone(),
+                                token: self.cfg.erp_token.clone(),
+                                txt: t,
+                            });
+                            self.sync_timers();
+                        }
+                    }
+                } else if self.page == Page::Work {
+                    self.work_filter = t;
+                    self.work_scroll = 0;
+                } else if self.page == Page::Apps {
                     self.app_filter = t;
                     self.app_scroll = 0;
                 } else {
@@ -2194,7 +2404,7 @@ impl App {
                     self.clip_scroll = 0;
                 }
             }
-            if self.page == Page::Apps {
+            if self.page == Page::Apps && self.work_drop.is_none() {
                 self.ensure_picker_icons();
             }
         }
@@ -2206,12 +2416,278 @@ impl App {
         self.render();
     }
 
+    pub fn on_key_down(&mut self, vk: u16) {
+        let Some(kind) = self.work_drop else {
+            return;
+        };
+        let len = self.work_drop_options_for(kind).len();
+        if len == 0 {
+            return;
+        }
+        match vk {
+            0x28 => {
+                // VK_DOWN
+                self.work_drop_sel = (self.work_drop_sel + 1).min(len - 1);
+                if self.work_drop_sel >= self.work_drop_scroll + WORK_DROP_ROWS {
+                    self.work_drop_scroll = self.work_drop_sel + 1 - WORK_DROP_ROWS;
+                }
+                self.render();
+            }
+            0x26 => {
+                // VK_UP
+                self.work_drop_sel = self.work_drop_sel.saturating_sub(1);
+                if self.work_drop_sel < self.work_drop_scroll {
+                    self.work_drop_scroll = self.work_drop_sel;
+                }
+                self.render();
+            }
+            _ => {}
+        }
+    }
+
     /// Our window lost focus while typing a task: cancel quietly.
     pub fn on_kill_focus(&mut self) {
-        if self.entering.is_some() {
+        if self.entering.is_some() || self.work_drop.is_some() {
+            self.work_drop = None;
+            self.work_drop_query.clear();
             self.finish_entry(false, false);
             self.render();
         }
+    }
+
+    // --------------------------------------------------- work (ERPNext) ------
+
+    pub fn refresh_work(&mut self, reload_cfg: bool) {
+        if reload_cfg {
+            let fresh = store::load_config();
+            self.cfg.erp_url = fresh.erp_url;
+            self.cfg.erp_token = fresh.erp_token;
+        }
+        if self.cfg.erp_url.trim().is_empty() || self.cfg.erp_token.trim().is_empty() {
+            self.work_loading = false;
+            self.work_error = Some("Configure erp_url and erp_token in config.ini".into());
+            self.sync_timers();
+            return;
+        }
+        self.work_loading = true;
+        self.work_error = None;
+        self.spin_t = 0.0;
+        let _ = self.work.tx.send(work::Req::Refresh {
+            url: self.cfg.erp_url.clone(),
+            token: self.cfg.erp_token.clone(),
+        });
+        self.sync_timers();
+    }
+
+    pub fn on_work(&mut self) {
+        let (toast, revert) = {
+            let mut d = self.work.data.lock().unwrap();
+            self.work_user = d.user.clone();
+            self.work_items = d.items.clone();
+            self.work_users = d.users.clone();
+            self.work_search_users = d.search_users.clone();
+            if !d.statuses.is_empty() {
+                self.work_statuses = d.statuses.clone();
+            }
+            self.work_loading = d.loading;
+            self.work_searching = d.searching;
+            self.work_saving = d.saving;
+            self.work_error = d.error.clone();
+            (d.toast.take(), d.revert.take())
+        };
+        if !self.work_loading && self.work_error.is_none() {
+            self.work_last_sync = Some(Instant::now());
+        }
+        if let Some((name, field, prev)) = revert {
+            if let Some(it) = self.work_items.iter_mut().find(|i| i.name == name) {
+                if field == "status" {
+                    it.status = prev;
+                } else if field == "current_assignee" {
+                    it.current_assignee = prev;
+                }
+            }
+        }
+        if let Some((msg, ok)) = toast {
+            self.work_toast = Some((msg, ok, Instant::now()));
+        }
+        let max_scroll = self.work_view().len().saturating_sub(WORK_ROWS);
+        if self.work_scroll > max_scroll {
+            self.work_scroll = max_scroll;
+        }
+        if let Some(kind) = self.work_drop {
+            let len = self.work_drop_options_for(kind).len();
+            if len == 0 {
+                self.work_drop_sel = 0;
+                self.work_drop_scroll = 0;
+            } else {
+                self.work_drop_sel = self.work_drop_sel.min(len - 1);
+                self.work_drop_scroll = self.work_drop_scroll.min(len.saturating_sub(WORK_DROP_ROWS));
+            }
+        }
+        self.sync_timers();
+        if !self.hidden {
+            self.render();
+        }
+    }
+
+    pub fn work_view(&self) -> Vec<&work::BacklogItem> {
+        let q = self.work_filter.trim().to_ascii_lowercase();
+        self.work_items
+            .iter()
+            .filter(|it| {
+                if self.work_mine_only
+                    && !self.work_user.is_empty()
+                    && !it.current_assignee.eq_ignore_ascii_case(&self.work_user)
+                {
+                    return false;
+                }
+                if q.is_empty() {
+                    return true;
+                }
+                it.name.to_ascii_lowercase().contains(&q)
+                    || it.subject.to_ascii_lowercase().contains(&q)
+                    || it.status.to_ascii_lowercase().contains(&q)
+                    || it.current_assignee.to_ascii_lowercase().contains(&q)
+                    || it.sprint.to_ascii_lowercase().contains(&q)
+                    || self.work_user_label(&it.current_assignee).to_ascii_lowercase().contains(&q)
+            })
+            .collect()
+    }
+
+    pub fn work_current(&self) -> Option<&work::BacklogItem> {
+        let sel = self.work_selected.as_deref()?;
+        self.work_items.iter().find(|i| i.name == sel)
+    }
+
+    pub fn work_user_label(&self, email: &str) -> String {
+        let e = email.trim();
+        if e.is_empty() {
+            return "Unassigned".to_string();
+        }
+        for u in self.work_users.iter().chain(self.work_search_users.iter()) {
+            if u.email.eq_ignore_ascii_case(e) && !u.name.trim().is_empty() {
+                return u.name.clone();
+            }
+        }
+        e.to_string()
+    }
+
+    pub fn work_drop_options_for(&self, kind: WorkDrop) -> Vec<(String, String)> {
+        let q = self.work_drop_query.trim().to_ascii_lowercase();
+        match kind {
+            WorkDrop::Status => self
+                .work_statuses
+                .iter()
+                .filter(|s| q.is_empty() || s.to_ascii_lowercase().contains(&q))
+                .map(|s| (s.clone(), String::new()))
+                .collect(),
+            WorkDrop::Assignee => {
+                let mut out: Vec<(String, String)> = Vec::new();
+                if q.is_empty() || "unassigned".contains(&q) || "clear".contains(&q) {
+                    out.push((String::new(), "Unassigned".to_string()));
+                }
+                let src = if self.work_drop_query.trim().is_empty() {
+                    self.work_users.iter().chain(self.work_search_users.iter())
+                } else {
+                    self.work_search_users.iter().chain(self.work_users.iter())
+                };
+                for u in src {
+                    if out.iter().any(|(e, _)| !e.is_empty() && e.eq_ignore_ascii_case(&u.email)) {
+                        continue;
+                    }
+                    if q.is_empty()
+                        || u.email.to_ascii_lowercase().contains(&q)
+                        || u.name.to_ascii_lowercase().contains(&q)
+                    {
+                        out.push((u.email.clone(), u.name.clone()));
+                    }
+                }
+                out
+            }
+        }
+    }
+
+    fn open_work_drop(&mut self, kind: WorkDrop) {
+        if self.work_drop == Some(kind) {
+            self.work_drop = None;
+            self.work_drop_query.clear();
+            self.finish_entry(false, true);
+            return;
+        }
+        self.work_drop = Some(kind);
+        self.work_drop_query.clear();
+        self.work_drop_scroll = 0;
+        self.work_drop_sel = 0;
+        if let Some(cur) = self.work_current() {
+            let cur_val = match kind {
+                WorkDrop::Assignee => cur.current_assignee.as_str(),
+                WorkDrop::Status => cur.status.as_str(),
+            };
+            let opts = self.work_drop_options_for(kind);
+            if let Some(idx) = opts.iter().position(|(v, _)| v.eq_ignore_ascii_case(cur_val)) {
+                self.work_drop_sel = idx;
+                if idx >= WORK_DROP_ROWS {
+                    self.work_drop_scroll = idx + 1 - WORK_DROP_ROWS;
+                }
+            }
+        }
+        self.start_entry();
+        if self.entering.is_some() {
+            self.entry_search = true;
+        }
+        if kind == WorkDrop::Assignee
+            && !self.cfg.erp_url.is_empty()
+            && !self.cfg.erp_token.is_empty()
+        {
+            self.work_searching = true;
+            let _ = self.work.tx.send(work::Req::SearchUsers {
+                url: self.cfg.erp_url.clone(),
+                token: self.cfg.erp_token.clone(),
+                txt: String::new(),
+            });
+            self.sync_timers();
+        }
+    }
+
+    fn apply_work_option(&mut self, kind: WorkDrop, value: &str) {
+        let Some(sel) = self.work_selected.clone() else {
+            return;
+        };
+        let (field, prev) = {
+            let Some(it) = self.work_items.iter_mut().find(|i| i.name == sel) else {
+                return;
+            };
+            match kind {
+                WorkDrop::Assignee => {
+                    let prev = it.current_assignee.clone();
+                    if prev == value {
+                        return;
+                    }
+                    it.current_assignee = value.to_string();
+                    ("current_assignee".to_string(), prev)
+                }
+                WorkDrop::Status => {
+                    let prev = it.status.clone();
+                    if prev == value {
+                        return;
+                    }
+                    it.status = value.to_string();
+                    ("status".to_string(), prev)
+                }
+            }
+        };
+        self.work_saving = true;
+        self.work_toast = None;
+        let _ = self.work.tx.send(work::Req::UpdateField {
+            url: self.cfg.erp_url.clone(),
+            token: self.cfg.erp_token.clone(),
+            user: self.work_user.clone(),
+            name: sel,
+            field,
+            value: value.to_string(),
+            prev,
+        });
+        self.sync_timers();
     }
 
     // ------------------------------------------------------------- events ---
@@ -3718,5 +4194,180 @@ mod glance_tests {
         assert_eq!(day_fraction(8, 59, 9, 18), None);
         assert_eq!(day_fraction(18, 0, 9, 18), None);
         assert_eq!(day_fraction(10, 0, 18, 9), None);
+    }
+
+    #[test]
+    fn work_ui_hit_targets_and_snapshots() {
+        use crate::ui::CONTENT_Y;
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let scale = 2.0f32;
+        let mut a = App::new(HWND::default(), scale).expect("app");
+        a.expanded = true;
+        a.sw = Spring::new(EXP_W);
+        a.sh = Spring::new(EXP_H);
+        a.page = Page::Work;
+        a.snap_tab();
+        a.work_user = "hervey.geralph@livro.systems".into();
+        a.work_users = vec![
+            work::UserOpt { email: "hervey.geralph@livro.systems".into(), name: "Hervey Geralph Mapano".into() },
+            work::UserOpt { email: "cllamis@livro.systems".into(), name: "Christian Llamis".into() },
+            work::UserOpt { email: "denesse@livro.systems".into(), name: "Denesse".into() },
+        ];
+        a.work_search_users = a.work_users.clone();
+        a.work_items = vec![
+            work::BacklogItem {
+                name: "SPB-07407".into(),
+                subject: "Develop Teacher Quiz Analytics in SILID LMS v3".into(),
+                status: "Overdue".into(),
+                current_assignee: "hervey.geralph@livro.systems".into(),
+                dev_assignee: "hervey.geralph@livro.systems".into(),
+                priority: "Medium".into(),
+                sprint: "SPR-0100: Sprint 22 R&D".into(),
+                comments: 4,
+                modified: "2026-11-06 21:52:39".into(),
+            },
+            work::BacklogItem {
+                name: "SPB-07381".into(),
+                subject: "Refactor Assessment Rubric Calculation & Export".into(),
+                status: "Pending Review".into(),
+                current_assignee: "cllamis@livro.systems".into(),
+                dev_assignee: "hervey.geralph@livro.systems".into(),
+                priority: "High".into(),
+                sprint: "SPR-0100: Sprint 22 R&D".into(),
+                comments: 2,
+                modified: "2026-11-05 16:10:00".into(),
+            },
+            work::BacklogItem {
+                name: "SPB-07342".into(),
+                subject: "Fix Student Submission Attachment Preview Modal".into(),
+                status: "Working".into(),
+                current_assignee: "hervey.geralph@livro.systems".into(),
+                dev_assignee: "hervey.geralph@livro.systems".into(),
+                priority: "High".into(),
+                sprint: "SPR-0100: Sprint 22 R&D".into(),
+                comments: 1,
+                modified: "2026-11-04 11:20:00".into(),
+            },
+            work::BacklogItem {
+                name: "SPB-07299".into(),
+                subject: "Class Gradebook Batch Sync Performance Optimization".into(),
+                status: "Completed".into(),
+                current_assignee: "hervey.geralph@livro.systems".into(),
+                dev_assignee: "hervey.geralph@livro.systems".into(),
+                priority: "Medium".into(),
+                sprint: "SPR-0099: Sprint 21 R&D".into(),
+                comments: 5,
+                modified: "2026-11-01 09:45:00".into(),
+            },
+        ];
+
+        let save_png = |a: &mut App, tag: &str| {
+            let (pw, ph) = ((EXP_W * scale) as i32, (EXP_H * scale) as i32);
+            a.gfx.begin(pw, ph).unwrap();
+            let mut hits = Vec::new();
+            crate::ui::draw(a, EXP_W, EXP_H, &mut hits);
+            let _ = a.gfx.end();
+            a.hits = hits;
+            if let Ok(dir) = std::env::var("WORK_PREVIEW_DIR") {
+                let (bw, _bh, buf) = a.gfx.snapshot();
+                let png = encode_bgra_png(pw as u32, ph as u32, bw as usize, &buf);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(format!("{dir}/{tag}.png"), png).unwrap();
+            }
+        };
+
+        // 1. List view hits
+        save_png(&mut a, "work_list");
+        assert!(a.hits.iter().any(|h| h.act == Act::Tab(Page::Work)));
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkSelect(0)));
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkSelect(3)));
+
+        // 2. Select first item -> Detail view hits
+        a.work_selected = Some("SPB-07407".into());
+        save_png(&mut a, "work_detail");
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkBack));
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkAssignee));
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkStatus));
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkOpenBrowser));
+        assert!(a.hits.iter().any(|h| h.act == Act::WorkOpenComments));
+
+        // 3. Open Assignee dropdown -> Z-order puts WorkPickOption above WorkOpenBrowser
+        a.work_drop = Some(WorkDrop::Assignee);
+        a.work_drop_sel = 1;
+        save_png(&mut a, "work_assignee_drop");
+        assert_eq!(a.hit_at(120.0, CONTENT_Y + 140.0), Some(Act::WorkPickOption(0)));
+        assert_eq!(a.hit_at(500.0, CONTENT_Y + 195.0), Some(Act::WorkCloseDrop));
+
+        // 4. Open Status dropdown -> Z-order puts WorkPickOption above bottom controls
+        a.work_drop = Some(WorkDrop::Status);
+        a.work_drop_query = "work".into();
+        a.work_drop_sel = 0;
+        save_png(&mut a, "work_status_drop");
+        assert_eq!(a.work_drop_options_for(WorkDrop::Status).len(), 1);
+        assert_eq!(a.hit_at(400.0, CONTENT_Y + 140.0), Some(Act::WorkPickOption(0)));
+    }
+
+    fn encode_bgra_png(w: u32, h: u32, stride_px: usize, bgra: &[u8]) -> Vec<u8> {
+        fn crc32(data: &[u8]) -> u32 {
+            let mut c = 0xFFFF_FFFFu32;
+            for &b in data {
+                c ^= b as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 };
+                }
+            }
+            !c
+        }
+        fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], body: &[u8]) {
+            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend_from_slice(tag);
+            out.extend_from_slice(body);
+            let crc = crc32(&out[start..]);
+            out.extend_from_slice(&crc.to_be_bytes());
+        }
+        let mut raw = Vec::with_capacity((w as usize * 4 + 1) * h as usize);
+        for y in 0..h as usize {
+            raw.push(0); // filter = None
+            let row = y * stride_px * 4;
+            for x in 0..w as usize {
+                let p = row + x * 4;
+                let (b, g, r, a) = (bgra[p], bgra[p + 1], bgra[p + 2], bgra[p + 3]);
+                // composite over dark slate background so notch corners are clearly visible
+                let bg = 28u16;
+                let inv = (255 - a) as u16;
+                let un = |v: u8| ((v as u16 + (bg * inv + 127) / 255).min(255)) as u8;
+                raw.extend_from_slice(&[un(r), un(g), un(b), 255]);
+            }
+        }
+        let mut z = vec![0x78, 0x01];
+        let mut s1 = 1u32;
+        let mut s2 = 0u32;
+        for &b in &raw {
+            s1 = (s1 + b as u32) % 65521;
+            s2 = (s2 + s1) % 65521;
+        }
+        let chunks: Vec<&[u8]> = raw.chunks(65535).collect();
+        for (i, blk) in chunks.iter().enumerate() {
+            z.push(if i + 1 == chunks.len() { 1 } else { 0 });
+            let len = blk.len() as u16;
+            z.extend_from_slice(&len.to_le_bytes());
+            z.extend_from_slice(&(!len).to_le_bytes());
+            z.extend_from_slice(blk);
+        }
+        z.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &ihdr);
+        chunk(&mut png, b"IDAT", &z);
+        chunk(&mut png, b"IEND", &[]);
+        png
     }
 }

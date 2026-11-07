@@ -391,7 +391,7 @@ pub fn squash(jiggle: f32) -> (f32, f32) {
     (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
 }
 
-const TAB_LABELS: [&str; 9] = ["Media", "Controls", "Today", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
+const TAB_LABELS: [&str; 10] = ["Media", "Controls", "Today", "Work", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
 
 /// Where each tab sits in the top row, in the same order as `PAGES`.
 pub fn tab_rects() -> Vec<Rect> {
@@ -399,9 +399,9 @@ pub fn tab_rects() -> Vec<Rect> {
     let text_w = |s: &str| -> f32 {
         s.chars().map(|c| match c { 'i' | 'l' | 't' | 'f' | 'j' | 'r' | 'I' => 3.4, 'm' | 'w' | 'M' | 'W' => 9.6, _ => 6.7 }).sum()
     };
-    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 16.0).collect();
+    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 12.0).collect();
     let total: f32 = widths.iter().sum();
-    let (left, right) = (46.0, EXP_W - 46.0);
+    let (left, right) = (44.0, EXP_W - 44.0);
     let gap = ((right - left - total) / (TAB_LABELS.len() as f32 - 1.0)).clamp(2.0, 12.0);
     let used = total + gap * (TAB_LABELS.len() as f32 - 1.0);
     let mut x = left + (right - left - used) / 2.0;
@@ -456,6 +456,7 @@ fn draw_expanded(a: &App, ca: f32, hits: &mut Vec<Hit>) {
         Page::Apps => page_apps(a, ca, hits),
         Page::Shelf => page_shelf(a, ca, hits),
         Page::Tasks => page_tasks(a, ca, hits),
+        Page::Work => page_work(a, ca, hits),
         Page::Stats => page_stats(a, ca),
         Page::Power => page_power(a, ca, hits),
         Page::Game => {
@@ -1312,6 +1313,444 @@ fn page_tasks(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     draw_calendar(a, ca);
 }
 
+// ------------------------------------------------------------------ work ----
+
+fn page_work(a: &App, ca: f32, hits: &mut Vec<Hit>) {
+    if let Some(item) = a.work_current() {
+        page_work_detail(a, item, ca, hits);
+        return;
+    }
+    page_work_list(a, ca, hits);
+}
+
+fn page_work_list(a: &App, ca: f32, hits: &mut Vec<Hit>) {
+    let g = &a.gfx;
+    let f = &g.fonts;
+    let view = a.work_view();
+
+    // Header row: title + count, All/Mine chip, search box, spinning refresh
+    let head = if a.work_items.is_empty() {
+        "Sprint Backlogs".to_string()
+    } else {
+        format!("Sprint Backlogs  \u{00B7}  {}", view.len())
+    };
+    g.text(&head, Rect::new(26.0, 4.0, 180.0, 24.0), &f.small, a.accent.fade(ca), Align::Left);
+
+    if !a.work_items.is_empty() {
+        let scope = Rect::new(196.0, 5.0, 56.0, 22.0);
+        hits.push(Hit { r: scope, act: Act::WorkScopeToggle });
+        let on = a.work_mine_only;
+        g.fill_rrect(
+            scope,
+            11.0,
+            (if on {
+                a.accent.fade(0.24)
+            } else if hot(a, Act::WorkScopeToggle) {
+                Color::white(0.12)
+            } else {
+                Color::white(0.06)
+            })
+            .fade(ca),
+        );
+        g.text(
+            if on { "Mine" } else { "All" },
+            scope,
+            &f.tiny,
+            (if on { a.accent } else { T2 }).fade(ca),
+            Align::Center,
+        );
+    }
+
+    // Refresh button
+    let rf = Rect::new(EXP_W - 50.0, 4.0, 26.0, 24.0);
+    hits.push(Hit { r: rf, act: Act::WorkRefresh });
+    g.fill_rrect(rf, 12.0, Color::white((if hot(a, Act::WorkRefresh) { 0.14 } else { 0.06 }) * ca));
+    let deg = if a.work_loading { a.spin_t * 360.0 } else { 0.0 };
+    g.rotated(rf.cx(), rf.cy(), deg, || {
+        g.icon('\u{E72C}', rf, &f.icon14, (if a.work_loading { a.accent } else { T2 }).fade(ca))
+    });
+
+    // Search box
+    let sr = Rect::new(EXP_W - 210.0, 4.0, 152.0, 24.0);
+    let typing = a.entry_search && a.work_drop.is_none();
+    if typing || !a.work_filter.is_empty() {
+        let mut t = a.work_filter.clone();
+        if typing {
+            t.push('\u{2502}');
+        }
+        g.fill_rrect(sr, 12.0, Color::white(0.14 * ca));
+        g.text(&t, Rect::new(sr.x + 10.0, sr.y, sr.w - 30.0, sr.h), &f.small, T1.fade(ca), Align::Left);
+        if !typing {
+            let x = Rect::new(sr.x + sr.w - 24.0, sr.y, 24.0, sr.h);
+            hits.push(Hit { r: sr, act: Act::WorkSearch });
+            hits.push(Hit { r: x, act: Act::WorkSearchClear });
+            g.icon('\u{E711}', x, &f.icon14, (if hot(a, Act::WorkSearchClear) { T1 } else { T2 }).fade(ca));
+        }
+    } else {
+        hits.push(Hit { r: sr, act: Act::WorkSearch });
+        g.fill_rrect(sr, 12.0, Color::white((if hot(a, Act::WorkSearch) { 0.11 } else { 0.06 }) * ca));
+        g.icon('\u{E721}', Rect::new(sr.x + 4.0, sr.y, 22.0, sr.h), &f.icon14, T3.fade(ca));
+        g.text("Search tasks", Rect::new(sr.x + 28.0, sr.y, sr.w - 32.0, sr.h), &f.small, T3.fade(ca), Align::Left);
+    }
+
+    // Loading / error / empty states
+    if a.work_loading && a.work_items.is_empty() {
+        spinner(g, EXP_W / 2.0, 96.0, 15.0, a.spin_t, a.accent, ca);
+        g.text("Syncing Sprint Backlogs\u{2026}", Rect::new(0.0, 124.0, EXP_W, 22.0), &f.small, T2.fade(ca), Align::Center);
+        return;
+    }
+
+    if let Some(err) = &a.work_error {
+        if a.work_items.is_empty() {
+            g.icon('\u{E783}', Rect::new(EXP_W / 2.0 - 18.0, 52.0, 36.0, 32.0), &f.icon22, Color(1.0, 0.45, 0.42, ca));
+            g.text(err, Rect::new(36.0, 88.0, EXP_W - 72.0, 22.0), &f.small, T1.fade(ca), Align::Center);
+            let b1 = Rect::new(EXP_W / 2.0 - 126.0, 122.0, 118.0, 30.0);
+            let b2 = Rect::new(EXP_W / 2.0 + 8.0, 122.0, 96.0, 30.0);
+            hits.push(Hit { r: b1, act: Act::WorkOpenConfig });
+            hits.push(Hit { r: b2, act: Act::WorkRefresh });
+            g.fill_rrect(b1, 15.0, Color::white((if hot(a, Act::WorkOpenConfig) { 0.18 } else { 0.10 }) * ca));
+            g.text("Edit config.ini", b1, &f.small, T1.fade(ca), Align::Center);
+            g.fill_rrect(b2, 15.0, a.accent.fade((if hot(a, Act::WorkRefresh) { 0.95 } else { 0.80 }) * ca));
+            g.text("Retry", b2, &f.small, Color(0.0, 0.0, 0.0, ca), Align::Center);
+            return;
+        }
+    }
+
+    if view.is_empty() {
+        let (l1, l2) = if !a.work_filter.is_empty() {
+            ("No Sprint Backlogs match your filter.", "Press Esc in search or click \u{00D7} to clear.")
+        } else if a.work_mine_only {
+            ("No Sprint Backlogs currently assigned to you.", "Click 'Mine' above to switch back to 'All'.")
+        } else {
+            ("No Sprint Backlogs found.", "Click the refresh icon to check ERPNext.")
+        };
+        g.text(l1, Rect::new(0.0, 82.0, EXP_W, 24.0), &f.body, T2.fade(ca), Align::Center);
+        g.text(l2, Rect::new(0.0, 106.0, EXP_W, 20.0), &f.small, T3.fade(ca), Align::Center);
+        return;
+    }
+
+    // 4 stacked task bars matching the sketch
+    for row in 0..WORK_ROWS {
+        let idx = a.work_scroll + row;
+        let Some(item) = view.get(idx) else { break };
+        let r = Rect::new(24.0, 34.0 + row as f32 * 41.0, EXP_W - 48.0, 36.0);
+        let act = Act::WorkSelect(idx);
+        hits.push(Hit { r, act });
+        let k = hot_k(a, act);
+        let scol = crate::work::status_color(&item.status);
+
+        g.fill_rrect(r, 10.0, Color::white((0.055 + 0.075 * k) * ca));
+        g.stroke_rrect(r, 10.0, Color::white((0.08 + 0.12 * k) * ca), 1.0);
+        // Coloured status bar along the left inside edge
+        g.fill_rrect(Rect::new(r.x + 5.0, r.y + 7.0, 3.0, r.h - 14.0), 1.5, scol.fade(ca));
+
+        // SPB ID badge
+        g.text(&item.name, Rect::new(r.x + 14.0, r.y, 68.0, r.h), &f.tiny, T2.fade(ca), Align::Left);
+
+        // Status pill on the right + optional comment count
+        let cmt_w = if item.comments > 0 { 36.0 } else { 0.0 };
+        if item.comments > 0 {
+            let cr = Rect::new(r.x + r.w - 42.0, r.y + 7.0, 34.0, 22.0);
+            g.fill_rrect(cr, 11.0, Color::white(0.08 * ca));
+            g.text(&format!("{}", item.comments), cr, &f.tiny, T2.fade(ca), Align::Center);
+        }
+        let pill_w = (item.status.chars().count() as f32 * 6.0 + 18.0).clamp(64.0, 112.0);
+        let pr = Rect::new(r.x + r.w - 10.0 - cmt_w - pill_w, r.y + 7.0, pill_w, 22.0);
+        g.fill_rrect(pr, 11.0, scol.fade(0.18 * ca));
+        g.stroke_rrect(pr, 11.0, scol.fade(0.42 * ca), 1.0);
+        g.text(&item.status, pr, &f.tiny, scol.fade(ca), Align::Center);
+
+        // Task Subject / Title
+        let title_x = r.x + 84.0;
+        let title_w = (pr.x - title_x - 10.0).max(60.0);
+        g.text(&item.subject, Rect::new(title_x, r.y, title_w, r.h), &f.body, T1.fade(ca), Align::Left);
+    }
+
+    if view.len() > WORK_ROWS {
+        let (top, h) = (34.0, WORK_ROWS as f32 * 41.0 - 5.0);
+        let track = Rect::new(EXP_W - 16.0, top, 4.0, h);
+        g.fill_rrect(track, 2.0, Color::white(0.07 * ca));
+        let thumb_h = (h * WORK_ROWS as f32 / view.len() as f32).max(18.0);
+        let frac = a.work_scroll as f32 / (view.len() - WORK_ROWS) as f32;
+        g.fill_rrect(
+            Rect::new(track.x, top + (h - thumb_h) * frac.clamp(0.0, 1.0), 4.0, thumb_h),
+            2.0,
+            a.accent.fade(0.8 * ca),
+        );
+    }
+}
+
+fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mut Vec<Hit>) {
+    let g = &a.gfx;
+    let f = &g.fonts;
+
+    // ---- Top navigation strip: Back + ID/Sprint metadata + Save/Refresh status
+    let back = Rect::new(24.0, 0.0, 62.0, 22.0);
+    hits.push(Hit { r: back, act: Act::WorkBack });
+    g.fill_rrect(back, 11.0, Color::white((if hot(a, Act::WorkBack) { 0.16 } else { 0.08 }) * ca));
+    g.text("\u{2039} Back", back, &f.tiny, T1.fade(ca), Align::Center);
+
+    let mut meta = item.name.clone();
+    if !item.priority.is_empty() {
+        meta.push_str("  \u{00B7}  ");
+        meta.push_str(&item.priority);
+    }
+    if !item.sprint.is_empty() {
+        meta.push_str("  \u{00B7}  ");
+        meta.push_str(&item.sprint);
+    }
+    g.text(&meta, Rect::new(94.0, 0.0, 320.0, 22.0), &f.tiny, T3.fade(ca), Align::Left);
+
+    let rf = Rect::new(EXP_W - 48.0, 0.0, 24.0, 22.0);
+    hits.push(Hit { r: rf, act: Act::WorkRefresh });
+    let deg = if a.work_loading { a.spin_t * 360.0 } else { 0.0 };
+    g.rotated(rf.cx(), rf.cy(), deg, || {
+        g.icon('\u{E72C}', rf, &f.icon14, (if hot(a, Act::WorkRefresh) { T1 } else { T3 }).fade(ca))
+    });
+
+    if a.work_saving {
+        spinner(g, EXP_W - 118.0, 11.0, 5.5, a.spin_t, a.accent, ca);
+        g.text("Saving\u{2026}", Rect::new(EXP_W - 106.0, 0.0, 54.0, 22.0), &f.tiny, a.accent.fade(ca), Align::Left);
+    } else if let Some((msg, ok, t0)) = &a.work_toast {
+        if t0.elapsed().as_secs_f32() < 4.0 {
+            let tc = if *ok { Color(0.35, 0.88, 0.55, 1.0) } else { Color(1.0, 0.45, 0.42, 1.0) };
+            let label = if *ok { format!("\u{2713} {msg}") } else { ellipsize(msg, 24) };
+            g.text(&label, Rect::new(EXP_W - 214.0, 0.0, 160.0, 22.0), &f.tiny, tc.fade(ca), Align::Right);
+        }
+    }
+
+    // ---- 1. Top full-width Title box
+    let title_box = Rect::new(24.0, 26.0, EXP_W - 48.0, 46.0);
+    g.fill_rrect(title_box, 12.0, Color::white(0.065 * ca));
+    g.stroke_rrect(title_box, 12.0, Color::white(0.12 * ca), 1.0);
+    g.text_wrap(
+        &item.subject,
+        Rect::new(title_box.x + 14.0, title_box.y + 4.0, title_box.w - 28.0, title_box.h - 8.0),
+        &f.menu,
+        T1.fade(ca),
+        Align::Left,
+    );
+
+    // ---- 2. Middle-left `current_assignee` box (searchable Frappe Link)
+    let asg_box = Rect::new(24.0, 80.0, 270.0, 44.0);
+    let asg_open = a.work_drop == Some(WorkDrop::Assignee);
+    hits.push(Hit { r: asg_box, act: Act::WorkAssignee });
+    let asg_k = hot_k(a, Act::WorkAssignee);
+    g.fill_rrect(asg_box, 11.0, Color::white((if asg_open { 0.13 } else { 0.06 + 0.06 * asg_k }) * ca));
+    g.stroke_rrect(
+        asg_box,
+        11.0,
+        (if asg_open { a.accent } else { Color::white(0.13 + 0.14 * asg_k) }).fade(ca),
+        if asg_open { 1.4 } else { 1.0 },
+    );
+    g.text(
+        "Current Assignee",
+        Rect::new(asg_box.x + 12.0, asg_box.y + 3.0, asg_box.w - 36.0, 14.0),
+        &f.tiny,
+        (if asg_open { a.accent } else { T3 }).fade(ca),
+        Align::Left,
+    );
+    let asg_label = a.work_user_label(&item.current_assignee);
+    let av = Rect::new(asg_box.x + 12.0, asg_box.y + 19.0, 18.0, 18.0);
+    let av_col = if item.current_assignee.is_empty() { T3 } else { name_color(&asg_label) };
+    g.fill_circle(av.cx(), av.cy(), 9.0, av_col.fade(0.85 * ca));
+    let initial: String = asg_label.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "-".into());
+    g.text(&initial, av, &f.tiny, Color(0.0, 0.0, 0.0, 0.85 * ca), Align::Center);
+
+    let (asg_txt, asg_tc) = if asg_open {
+        if a.work_drop_query.is_empty() {
+            (format!("Search user\u{2026}\u{2502}"), T2)
+        } else {
+            (format!("{}\u{2502}", a.work_drop_query), T1)
+        }
+    } else if item.current_assignee.is_empty() {
+        ("Unassigned".to_string(), T3)
+    } else {
+        (asg_label, T1)
+    };
+    g.text(
+        &asg_txt,
+        Rect::new(asg_box.x + 36.0, asg_box.y + 17.0, asg_box.w - 64.0, 22.0),
+        &f.small,
+        asg_tc.fade(ca),
+        Align::Left,
+    );
+    g.icon(
+        if asg_open { '\u{E721}' } else { '\u{E70D}' },
+        Rect::new(asg_box.x + asg_box.w - 28.0, asg_box.y + 14.0, 22.0, 24.0),
+        &f.icon14,
+        (if asg_open { a.accent } else { T3 }).fade(ca),
+    );
+
+    // ---- 3. Middle-right `status` box (searchable Frappe Select)
+    let st_box = Rect::new(306.0, 80.0, 270.0, 44.0);
+    let st_open = a.work_drop == Some(WorkDrop::Status);
+    let scol = crate::work::status_color(&item.status);
+    hits.push(Hit { r: st_box, act: Act::WorkStatus });
+    let st_k = hot_k(a, Act::WorkStatus);
+    g.fill_rrect(st_box, 11.0, Color::white((if st_open { 0.13 } else { 0.06 + 0.06 * st_k }) * ca));
+    g.stroke_rrect(
+        st_box,
+        11.0,
+        (if st_open { scol } else { Color::white(0.13 + 0.14 * st_k) }).fade(ca),
+        if st_open { 1.4 } else { 1.0 },
+    );
+    g.text(
+        "Status",
+        Rect::new(st_box.x + 12.0, st_box.y + 3.0, st_box.w - 36.0, 14.0),
+        &f.tiny,
+        (if st_open { scol } else { T3 }).fade(ca),
+        Align::Left,
+    );
+    g.fill_circle(st_box.x + 19.0, st_box.y + 28.0, 5.0, scol.fade(ca));
+    let (st_txt, st_tc) = if st_open {
+        if a.work_drop_query.is_empty() {
+            (format!("Filter status\u{2026}\u{2502}"), T2)
+        } else {
+            (format!("{}\u{2502}", a.work_drop_query), T1)
+        }
+    } else {
+        (item.status.clone(), T1)
+    };
+    g.text(
+        &st_txt,
+        Rect::new(st_box.x + 32.0, st_box.y + 17.0, st_box.w - 60.0, 22.0),
+        &f.small,
+        st_tc.fade(ca),
+        Align::Left,
+    );
+    g.icon(
+        if st_open { '\u{E721}' } else { '\u{E70D}' },
+        Rect::new(st_box.x + st_box.w - 28.0, st_box.y + 14.0, 22.0, 24.0),
+        &f.icon14,
+        (if st_open { scol } else { T3 }).fade(ca),
+    );
+
+    // ---- 4. Bottom-center `click redirect` button (opens Sprint Backlog in ERPNext)
+    let redir = Rect::new(EXP_W / 2.0 - 98.0, 148.0, 196.0, 38.0);
+    hits.push(Hit { r: redir, act: Act::WorkOpenBrowser });
+    let rk = hot_k(a, Act::WorkOpenBrowser);
+    g.fill_rrect(redir, 12.0, a.accent.fade((0.18 + 0.14 * rk) * ca));
+    g.stroke_rrect(redir, 12.0, a.accent.fade((0.45 + 0.35 * rk) * ca), 1.0);
+    g.text("Open in ERPNext", Rect::new(redir.x + 16.0, redir.y, redir.w - 44.0, redir.h), &f.small, T1.fade(ca), Align::Center);
+    g.icon('\u{E8A7}', Rect::new(redir.x + redir.w - 34.0, redir.y, 24.0, redir.h), &f.icon14, a.accent.fade(ca));
+
+    // ---- 5. Bottom-right `Comments No.` circle badge
+    let (ccx, ccy, cr) = (EXP_W - 46.0, 167.0, 19.0);
+    let cbox = Rect::new(ccx - cr, ccy - cr, cr * 2.0, cr * 2.0);
+    hits.push(Hit { r: cbox, act: Act::WorkOpenComments });
+    let ck = hot_k(a, Act::WorkOpenComments);
+    g.fill_circle(ccx, ccy, cr, Color::white((0.09 + 0.09 * ck) * ca));
+    g.stroke_rrect(cbox, cr, (if ck > 0.1 { a.accent } else { Color::white(0.22) }).fade(ca), 1.2);
+    g.text(&format!("{}", item.comments), cbox, &f.menu, T1.fade(ca), Align::Center);
+    g.icon('\u{E8BD}', Rect::new(ccx - cr - 22.0, ccy - 10.0, 20.0, 20.0), &f.icon14, T3.fade(ca));
+
+    // ---- Searchable Dropdown Overlay (drawn last so it sits above bottom controls)
+    if let Some(kind) = a.work_drop {
+        hits.push(Hit {
+            r: Rect::new(0.0, 0.0, EXP_W, EXP_H - CONTENT_Y),
+            act: Act::WorkCloseDrop,
+        });
+        // Keep both field headers directly clickable above the backdrop
+        hits.push(Hit { r: asg_box, act: Act::WorkAssignee });
+        hits.push(Hit { r: st_box, act: Act::WorkStatus });
+
+        let opts = a.work_drop_options_for(kind);
+        let row_h = 23.5;
+        let vis_rows = opts.len().clamp(1, WORK_DROP_ROWS);
+        let drop_h = 6.0 + vis_rows as f32 * row_h;
+        let drop_r = match kind {
+            WorkDrop::Assignee => Rect::new(24.0, 126.0, 304.0, drop_h),
+            WorkDrop::Status => Rect::new(306.0, 126.0, 270.0, drop_h),
+        };
+        // Solid dark backdrop + surface so underlying controls never bleed through
+        g.fill_rrect(drop_r, 11.0, Color(0.0, 0.0, 0.0, ca));
+        g.fill_rrect(drop_r, 11.0, Color(0.09, 0.095, 0.115, ca));
+        let border_col = match kind {
+            WorkDrop::Assignee => a.accent,
+            WorkDrop::Status => scol,
+        };
+        g.stroke_rrect(drop_r, 11.0, border_col.fade(0.55 * ca), 1.2);
+
+        if opts.is_empty() {
+            if kind == WorkDrop::Assignee && a.work_searching {
+                spinner(g, drop_r.cx() - 48.0, drop_r.cy(), 5.0, a.spin_t, a.accent, ca);
+                g.text("Searching users\u{2026}", drop_r, &f.small, T2.fade(ca), Align::Center);
+            } else {
+                g.text("No matches", drop_r, &f.small, T3.fade(ca), Align::Center);
+            }
+        } else {
+            for row in 0..WORK_DROP_ROWS {
+                let idx = a.work_drop_scroll + row;
+                let Some((val, sub)) = opts.get(idx) else { break };
+                let rr = Rect::new(drop_r.x + 4.0, drop_r.y + 3.0 + row as f32 * row_h, drop_r.w - 13.0, row_h - 1.0);
+                let oact = Act::WorkPickOption(idx);
+                hits.push(Hit { r: rr, act: oact });
+                let is_sel = idx == a.work_drop_sel;
+                let is_hot = hot(a, oact);
+                if is_hot || is_sel {
+                    g.fill_rrect(rr, 7.0, Color::white((if is_hot { 0.17 } else { 0.11 }) * ca));
+                }
+                match kind {
+                    WorkDrop::Assignee => {
+                        let active = item.current_assignee.eq_ignore_ascii_case(val);
+                        let title = if val.is_empty() {
+                            "Unassigned"
+                        } else if !sub.is_empty() {
+                            sub.as_str()
+                        } else {
+                            val.as_str()
+                        };
+                        g.text(
+                            title,
+                            Rect::new(rr.x + 8.0, rr.y, rr.w - 118.0, rr.h),
+                            &f.small,
+                            (if val.is_empty() { T2 } else { T1 }).fade(ca),
+                            Align::Left,
+                        );
+                        if !val.is_empty() && !sub.eq_ignore_ascii_case(val) {
+                            g.text(
+                                val,
+                                Rect::new(rr.x + rr.w - 112.0, rr.y, 90.0, rr.h),
+                                &f.tiny,
+                                T3.fade(ca),
+                                Align::Right,
+                            );
+                        }
+                        if active {
+                            g.icon('\u{E73E}', Rect::new(rr.x + rr.w - 22.0, rr.y, 18.0, rr.h), &f.icon14, a.accent.fade(ca));
+                        }
+                    }
+                    WorkDrop::Status => {
+                        let active = item.status.eq_ignore_ascii_case(val);
+                        let oc = crate::work::status_color(val);
+                        g.fill_circle(rr.x + 12.0, rr.cy(), 4.5, oc.fade(ca));
+                        g.text(val, Rect::new(rr.x + 24.0, rr.y, rr.w - 48.0, rr.h), &f.small, T1.fade(ca), Align::Left);
+                        if active {
+                            g.icon('\u{E73E}', Rect::new(rr.x + rr.w - 24.0, rr.y, 20.0, rr.h), &f.icon14, oc.fade(ca));
+                        }
+                    }
+                }
+            }
+            if opts.len() > WORK_DROP_ROWS {
+                let (top, h) = (drop_r.y + 7.0, drop_r.h - 14.0);
+                let track = Rect::new(drop_r.x + drop_r.w - 6.0, top, 3.0, h);
+                g.fill_rrect(track, 1.5, Color::white(0.08 * ca));
+                let th = (h * WORK_DROP_ROWS as f32 / opts.len() as f32).max(14.0);
+                let frac = a.work_drop_scroll as f32 / (opts.len() - WORK_DROP_ROWS) as f32;
+                g.fill_rrect(
+                    Rect::new(track.x, top + (h - th) * frac.clamp(0.0, 1.0), 3.0, th),
+                    1.5,
+                    border_col.fade(0.8 * ca),
+                );
+            }
+            if kind == WorkDrop::Assignee && a.work_searching {
+                spinner(g, drop_r.x + drop_r.w - 14.0, drop_r.y + 10.0, 4.0, a.spin_t, a.accent, ca);
+            }
+        }
+    }
+}
+
 fn draw_calendar(a: &App, ca: f32) {
     let g = &a.gfx;
     let f = &g.fonts;
@@ -1419,5 +1858,18 @@ mod tests {
     fn previews_collapse_whitespace_and_truncate() {
         assert_eq!(preview("a \n\t b   c"), "a b c");
         assert_eq!(preview(&"x".repeat(500)).chars().count(), 160);
+    }
+
+    #[test]
+    fn ten_tabs_fit_between_pin_and_collapse() {
+        assert_eq!(TAB_LABELS.len(), PAGES.len());
+        let rects = tab_rects();
+        assert_eq!(rects.len(), 10);
+        assert!(rects[0].x >= 42.0, "first tab overlaps pin: {}", rects[0].x);
+        let last = rects.last().unwrap();
+        assert!(last.x + last.w <= EXP_W - 42.0, "last tab overlaps collapse: {}", last.x + last.w);
+        for pair in rects.windows(2) {
+            assert!(pair[1].x >= pair[0].x + pair[0].w + 1.5);
+        }
     }
 }

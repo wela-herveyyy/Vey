@@ -297,6 +297,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             a.on_wheel(delta, p.y);
         }
         WM_CHAR => a.on_char(wp.0 as u16),
+        WM_KEYDOWN => a.on_key_down(wp.0 as u16),
         WM_KILLFOCUS => a.on_kill_focus(),
         WM_MOUSEACTIVATE => {
             let r = if a.is_entering() {
@@ -333,6 +334,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         m if m == sys::WM_UPDATE => on_update(hwnd, wp.0),
         m if m == sys::WM_MIC => a.update_call(),
         m if m == sys::WM_BRIGHT => a.on_brightness(wp.0 != 0, lp.0 as u32),
+        m if m == work::WM_WORK => a.on_work(),
         _ => return DefWindowProcW(hwnd, msg, wp, lp),
     }
     LRESULT(0)
@@ -608,6 +610,7 @@ mod tests {
             ("update", sys::WM_UPDATE),
             ("mic", sys::WM_MIC),
             ("frame", app::WM_FRAME),
+            ("work", work::WM_WORK),
         ];
         for (i, (na, a)) in all.iter().enumerate() {
             for (nb, b) in &all[i + 1..] {

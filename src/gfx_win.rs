@@ -303,6 +303,17 @@ impl Gfx {
         }
     }
 
+    pub fn text_wrap(&self, s: &str, r: Rect, f: &IDWriteTextFormat, c: Color, align: Align) {
+        if s.is_empty() || c.3 <= 0.003 {
+            return;
+        }
+        unsafe {
+            let _ = f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            self.text(s, r, f, c, align);
+            let _ = f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+    }
+
     /// Draw a glyph from the icon font, centred in `r`.
     pub fn icon(&self, glyph: char, r: Rect, f: &IDWriteTextFormat, c: Color) {
         let mut buf = [0u8; 4];

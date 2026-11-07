@@ -33,6 +33,84 @@ pub fn apps_path() -> PathBuf {
     data_dir().join("apps.txt")
 }
 
+pub fn config_path() -> PathBuf {
+    data_dir().join("config.ini")
+}
+
+/// Normalize an ERPNext / Frappe base URL (strips trailing slashes, adds https:// when missing,
+/// and fixes the common `.livro.sytems` typo).
+pub fn normalize_erp_url(raw: &str) -> String {
+    let mut s = raw.trim().trim_end_matches('/').to_string();
+    if s.is_empty() {
+        return s;
+    }
+    if !s.starts_with("http://") && !s.starts_with("https://") {
+        s = format!("https://{s}");
+    }
+    if s.contains(".livro.sytems") {
+        s = s.replace(".livro.sytems", ".livro.systems");
+    }
+    s
+}
+
+/// Normalize an ERPNext Authorization credential into a full header value
+/// (`token key:secret`, `Basic ...`, or `Bearer ...`).
+pub fn normalize_erp_auth(raw: &str) -> String {
+    let mut s = raw.trim();
+    if let Some(rest) = s.strip_prefix("Authorization:").or_else(|| s.strip_prefix("authorization:")) {
+        s = rest.trim();
+    }
+    let s = s.trim_matches('"').trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("token ") || lower.starts_with("basic ") || lower.starts_with("bearer ") {
+        s.to_string()
+    } else {
+        format!("token {s}")
+    }
+}
+
+fn load_local_erp_seed() -> (String, String) {
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut p = exe.parent();
+        for _ in 0..4 {
+            if let Some(d) = p {
+                dirs.push(d.to_path_buf());
+                p = d.parent();
+            }
+        }
+    }
+    for d in dirs {
+        let f = d.join("erp.local.ini");
+        if let Ok(text) = fs::read_to_string(&f) {
+            let (mut url, mut tok) = (String::new(), String::new());
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with('#') {
+                    continue;
+                }
+                if let Some((k, v)) = line.split_once('=') {
+                    match k.trim() {
+                        "erp_url" => url = normalize_erp_url(v),
+                        "erp_token" => tok = v.trim().to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            if !url.is_empty() || !tok.is_empty() {
+                return (url, tok);
+            }
+        }
+    }
+    (String::new(), String::new())
+}
+
 // ------------------------------------------------------------------ config
 
 pub struct Config {
@@ -85,6 +163,10 @@ pub struct Config {
     pub peek: bool,
     /// Read-only ICS link (Google / Outlook) for "meeting in 5 min" hints; empty = off.
     pub calendar_url: String,
+    /// ERPNext / Frappe server URL for the Work tab (Sprint Backlogs).
+    pub erp_url: String,
+    /// ERPNext API token (`api_key:api_secret`, `token ...`, `Basic ...`, or `Bearer ...`).
+    pub erp_token: String,
     /// A Start Menu shortcut so Windows search finds Nock.
     pub start_menu: bool,
     /// Hide the notch and bar while a full-screen app or game is in front.
@@ -157,6 +239,9 @@ idle_cycle=0
 state_dot=0
 # now and then the buddy peeks over the bottom edge of the notch (robot and kitty): 1 = on
 peek=0
+# ERPNext / Frappe server URL and API token (api_key:api_secret) for the Work tab
+erp_url=
+erp_token=
 ";
 
 pub fn load_config() -> Config {
@@ -199,6 +284,8 @@ pub fn load_config() -> Config {
         state_dot: false,
         peek: false,
         calendar_url: String::new(),
+        erp_url: String::new(),
+        erp_token: String::new(),
         monitor: 0,
     };
     for line in text.lines() {
@@ -234,6 +321,8 @@ pub fn load_config() -> Config {
                 "state_dot" => cfg.state_dot = on,
                 "peek" => cfg.peek = on,
                 "calendar_url" => cfg.calendar_url = v.trim().to_string(),
+                "erp_url" => cfg.erp_url = normalize_erp_url(v),
+                "erp_token" => cfg.erp_token = v.trim().to_string(),
                 "eye_min" => cfg.eye_min = v.trim().parse::<u16>().unwrap_or(0).min(600),
                 "clock_style" => cfg.clock_style = v.trim().parse::<u8>().unwrap_or(0).min(3),
                 "water_min" => cfg.water_min = v.trim().parse::<u16>().unwrap_or(0).min(600),
@@ -249,11 +338,23 @@ pub fn load_config() -> Config {
             }
         }
     }
+    let mut seeded = false;
+    if cfg.erp_url.is_empty() || cfg.erp_token.is_empty() {
+        let (su, st) = load_local_erp_seed();
+        if cfg.erp_url.is_empty() && !su.is_empty() {
+            cfg.erp_url = su;
+            seeded = true;
+        }
+        if cfg.erp_token.is_empty() && !st.is_empty() {
+            cfg.erp_token = st;
+            seeded = true;
+        }
+    }
     // A config file from an older version lacks the newer settings: write the
     // file back with every setting present (keeping the user's values).
-    let keys = ["hover_expand", "eq_animation", "clock_24h", "reserve_space", "top_bar", "buddy", "scenes", "scene_min", "stats", "clock_style", "water_min", "auto_break", "eye_min", "start_menu", "fs_hide", "auto_hide", "smart_hide", "auto_close", "smart", "calendar_url", "smart_sound", "monitor", "idle_glance", "idle_focus_bar", "idle_meeting_hours", "day_line", "day_start", "day_end", "idle_cycle", "state_dot", "peek"];
+    let keys = ["hover_expand", "eq_animation", "clock_24h", "reserve_space", "top_bar", "buddy", "scenes", "scene_min", "stats", "clock_style", "water_min", "auto_break", "eye_min", "start_menu", "fs_hide", "auto_hide", "smart_hide", "auto_close", "smart", "calendar_url", "smart_sound", "monitor", "idle_glance", "idle_focus_bar", "idle_meeting_hours", "day_line", "day_start", "day_end", "idle_cycle", "state_dot", "peek", "erp_url", "erp_token"];
     let present = |k: &str| text.lines().any(|l| l.trim().split_once('=').map(|(a, _)| a.trim() == k).unwrap_or(false));
-    if keys.iter().any(|k| !present(k)) {
+    if seeded || keys.iter().any(|k| !present(k)) {
         save_config(&cfg);
     }
     cfg
@@ -262,7 +363,7 @@ pub fn load_config() -> Config {
 pub fn save_config(c: &Config) {
     let b = |v: bool| if v { 1 } else { 0 };
     let text = format!(
-        "# Nock settings (1 = on, 0 = off)\nhover_expand={}\neq_animation={}\nclock_24h={}\nreserve_space={}\ntop_bar={}\n# buddy: 0 = off, 2 = cat, 5 = robot, 6 = ronin, 7 = courier, 8 = necromancer (1, 3 and 4 were retired and now give the robot)\nbuddy={}\n# fight scenes now and then (needs a buddy): 1 = on\nscenes={}\n# average minutes between scenes (1 to 60)\nscene_min={}\n# CPU and memory read-out on the top bar: 1 = on\nstats={}\n# top bar clock: 0 = digital, 1 = analog, 2 = binary, 3 = countdown to Friday\nclock_style={}\n# minutes between water reminders (0 = off)\nwater_min={}\n# after a focus session start a 5 minute break, then focus again: 1 = on\nauto_break={}\n# minutes between look-away reminders for your eyes (0 = off)\neye_min={}\n# a Start Menu shortcut so typing Nock in Windows search finds it: 1 = on\nstart_menu={}\n# hide the notch and bar while a full-screen app or game is in front: 1 = on\nfs_hide={}\n# keep the notch and bar hidden until the pointer touches the top edge: 1 = on\nauto_hide={}\n# fade the notch out while a window covers it, and back in when the window moves away: 1 = on\nsmart_hide={}\n# close the open panel when the pointer leaves it or another window comes to the front: 1 = on\nauto_close={}\n# smart notch hints (low battery, take a break after 90 min at the PC, link/code copied): 1 = on\nsmart={}\n# calendar link (Google: Settings > your calendar > Secret address in iCal format) for meeting hints; empty = off\ncalendar_url={}\n# a short chime with meeting, low battery and break hints: 1 = on\nsmart_sound={}\n# display for the notch and bar: 0 = primary, 2 = second display, and so on\nmonitor={}\n# extra beside the idle clock: 0 = off, 1 = tasks left, 2 = focus minutes today, 3 = CPU and RAM, 4 = next meeting\nidle_glance={}\n# progress line on the notch while a focus session runs: 1 = on\nidle_focus_bar={}\n# next meeting glance (idle_glance=4) shows meetings starting within this many hours (1 to 12)\nidle_meeting_hours={}\n# thin line along the bottom of the idle notch: how much of your workday has passed: 1 = on\nday_line={}\n# workday for the day line, in hours (0 to 24)\nday_start={}\nday_end={}\n# scroll up over the idle notch cycles time, date, tasks left and focus today: 1 = on\nidle_cycle={}\n# a state glyph on the notch: dot, ring (mic in use), amber square (battery low), arc (focus session): 1 = on\nstate_dot={}\n# now and then the buddy peeks over the bottom edge of the notch (robot and kitty): 1 = on\npeek={}\n",
+        "# Nock settings (1 = on, 0 = off)\nhover_expand={}\neq_animation={}\nclock_24h={}\nreserve_space={}\ntop_bar={}\n# buddy: 0 = off, 2 = cat, 5 = robot, 6 = ronin, 7 = courier, 8 = necromancer (1, 3 and 4 were retired and now give the robot)\nbuddy={}\n# fight scenes now and then (needs a buddy): 1 = on\nscenes={}\n# average minutes between scenes (1 to 60)\nscene_min={}\n# CPU and memory read-out on the top bar: 1 = on\nstats={}\n# top bar clock: 0 = digital, 1 = analog, 2 = binary, 3 = countdown to Friday\nclock_style={}\n# minutes between water reminders (0 = off)\nwater_min={}\n# after a focus session start a 5 minute break, then focus again: 1 = on\nauto_break={}\n# minutes between look-away reminders for your eyes (0 = off)\neye_min={}\n# a Start Menu shortcut so typing Nock in Windows search finds it: 1 = on\nstart_menu={}\n# hide the notch and bar while a full-screen app or game is in front: 1 = on\nfs_hide={}\n# keep the notch and bar hidden until the pointer touches the top edge: 1 = on\nauto_hide={}\n# fade the notch out while a window covers it, and back in when the window moves away: 1 = on\nsmart_hide={}\n# close the open panel when the pointer leaves it or another window comes to the front: 1 = on\nauto_close={}\n# smart notch hints (low battery, take a break after 90 min at the PC, link/code copied): 1 = on\nsmart={}\n# calendar link (Google: Settings > your calendar > Secret address in iCal format) for meeting hints; empty = off\ncalendar_url={}\n# a short chime with meeting, low battery and break hints: 1 = on\nsmart_sound={}\n# display for the notch and bar: 0 = primary, 2 = second display, and so on\nmonitor={}\n# extra beside the idle clock: 0 = off, 1 = tasks left, 2 = focus minutes today, 3 = CPU and RAM, 4 = next meeting\nidle_glance={}\n# progress line on the notch while a focus session runs: 1 = on\nidle_focus_bar={}\n# next meeting glance (idle_glance=4) shows meetings starting within this many hours (1 to 12)\nidle_meeting_hours={}\n# thin line along the bottom of the idle notch: how much of your workday has passed: 1 = on\nday_line={}\n# workday for the day line, in hours (0 to 24)\nday_start={}\nday_end={}\n# scroll up over the idle notch cycles time, date, tasks left and focus today: 1 = on\nidle_cycle={}\n# a state glyph on the notch: dot, ring (mic in use), amber square (battery low), arc (focus session): 1 = on\nstate_dot={}\n# now and then the buddy peeks over the bottom edge of the notch (robot and kitty): 1 = on\npeek={}\n# ERPNext / Frappe server URL and API token (api_key:api_secret) for the Work tab\nerp_url={}\nerp_token={}\n",
         b(c.hover_expand),
         b(c.eq_animation),
         b(c.clock_24h),
@@ -293,7 +394,9 @@ pub fn save_config(c: &Config) {
         c.day_end,
         b(c.idle_cycle),
         b(c.state_dot),
-        b(c.peek)
+        b(c.peek),
+        c.erp_url,
+        c.erp_token
     );
     let _ = fs::write(data_dir().join("config.ini"), text);
 }
@@ -563,5 +666,16 @@ mod pin_tests {
             assert!(!one_line.contains('\n') && !one_line.contains('\r'));
             assert_eq!(pin_unescape(&one_line), t);
         }
+    }
+
+    #[test]
+    fn erp_url_and_auth_normalization() {
+        assert_eq!(normalize_erp_url("https://erp.livro.sytems/"), "https://erp.livro.systems");
+        assert_eq!(normalize_erp_url("erp.livro.systems"), "https://erp.livro.systems");
+        assert_eq!(normalize_erp_url(""), "");
+        assert_eq!(normalize_erp_auth("abc:def"), "token abc:def");
+        assert_eq!(normalize_erp_auth("token abc:def"), "token abc:def");
+        assert_eq!(normalize_erp_auth("Authorization: Basic ZZZ="), "Basic ZZZ=");
+        assert_eq!(normalize_erp_auth("Bearer tok123"), "Bearer tok123");
     }
 }

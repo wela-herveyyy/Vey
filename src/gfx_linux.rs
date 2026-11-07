@@ -194,6 +194,10 @@ impl Gfx {
         }
     }
 
+    pub fn text_wrap(&self, s: &str, r: Rect, f: &Font, c: Color, align: Align) {
+        self.text(s, r, f, c, align);
+    }
+
     pub fn text(&self, s: &str, r: Rect, f: &Font, c: Color, align: Align) {
         if s.is_empty() || c.3 <= 0.003 {
             return;
