@@ -336,6 +336,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         m if m == sys::WM_BRIGHT => a.on_brightness(wp.0 != 0, lp.0 as u32),
         m if m == work::WM_WORK => a.on_work(),
         m if m == craft::WM_CRAFT => a.on_craft(),
+        m if m == codex::WM_CODEX => a.on_codex(),
         _ => return DefWindowProcW(hwnd, msg, wp, lp),
     }
     LRESULT(0)
@@ -613,6 +614,7 @@ mod tests {
             ("frame", app::WM_FRAME),
             ("work", work::WM_WORK),
             ("craft", craft::WM_CRAFT),
+            ("codex", codex::WM_CODEX),
         ];
         for (i, (na, a)) in all.iter().enumerate() {
             for (nb, b) in &all[i + 1..] {

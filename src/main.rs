@@ -26,6 +26,7 @@ mod radio;
 mod store;
 mod work;
 mod craft;
+mod codex;
 #[cfg(windows)]
 mod sys;
 #[cfg(windows)]

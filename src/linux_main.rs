@@ -54,17 +54,17 @@ const C_FOC: Color = Color(1.0, 0.58, 0.42, 1.0);
 
 const MEDIA_BAR: Rect = Rect::new(182.0, 104.0, EXP_W - 182.0 - 28.0, 18.0);
 
-const TAB_LABELS: [&str; 10] =
-    ["Media", "Controls", "Today", "Work", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
+const TAB_LABELS: [&str; 11] =
+    ["Media", "Controls", "Today", "Work", "Chat", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
 const MEDIA: usize = 0;
 const CONTROLS: usize = 1;
 const TODAY: usize = 2;
-const STATS: usize = 4;
-const CLIPBOARD: usize = 5;
-const SHELF: usize = 6;
-const APPS: usize = 7;
-const GAMES: usize = 8;
-const POWER: usize = 9;
+const STATS: usize = 5;
+const CLIPBOARD: usize = 6;
+const SHELF: usize = 7;
+const APPS: usize = 8;
+const GAMES: usize = 9;
+const POWER: usize = 10;
 
 /// Where each tab sits in the top row (same layout rule as the Windows panel).
 fn tab_rects() -> Vec<Rect> {
@@ -77,7 +77,7 @@ fn tab_rects() -> Vec<Rect> {
             })
             .sum()
     };
-    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 12.0).collect();
+    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 10.0).collect();
     let total: f32 = widths.iter().sum();
     let (left, right) = (44.0, EXP_W - 44.0);
     let n = TAB_LABELS.len() as f32 - 1.0;

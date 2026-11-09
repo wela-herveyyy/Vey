@@ -20,6 +20,7 @@ use crate::store::{self, AppEntry, Config, Todo};
 use crate::sys;
 use crate::work;
 use crate::craft;
+use crate::codex;
 
 // ------------------------------------------------------------------ layout
 
@@ -63,6 +64,15 @@ pub const SETTINGS_PAGES: [&str; 5] = [
 pub const CLIP_ROWS: usize = 5;
 pub const WORK_ROWS: usize = 4;
 pub const WORK_DROP_ROWS: usize = 3;
+pub const CHAT_VIS_LINES: usize = 5;
+pub const CHAT_MODEL_DROP_ROWS: usize = 3;
+
+#[derive(Clone, Debug)]
+pub struct ChatLine {
+    pub role: codex::Role,
+    pub text: String,
+    pub first_of_turn: bool,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WorkDrop {
@@ -154,16 +164,18 @@ pub enum Page {
     Apps,
     Tasks,
     Work,
+    Chat,
     Game,
     Stats,
     Power,
 }
 
-pub const PAGES: [Page; 10] = [
+pub const PAGES: [Page; 11] = [
     Page::Media,
     Page::Controls,
     Page::Tasks,
     Page::Work,
+    Page::Chat,
     Page::Stats,
     Page::Clipboard,
     Page::Shelf,
@@ -244,6 +256,27 @@ pub enum Act {
     CraftWeb(usize),
     CraftSite,
     CraftRefresh,
+    /// Chat tab (OpenAI OAuth / ChatGPT Codex account): sign-in, model picker, prompt & streaming chat
+    ChatSignIn,
+    ChatCancelSignIn,
+    #[allow(dead_code)]
+    ChatReloadAuth,
+    #[allow(dead_code)]
+    ChatOpenAuthDir,
+    ChatSignOut,
+    ChatModelDrop,
+    ChatPickModel(usize),
+    ChatCloseDrop,
+    ChatClear,
+    ChatCopyLast,
+    ChatPrompt,
+    ChatSend,
+    ChatStop,
+    ChatAttachFile,
+    ChatRemoveAttachment,
+    ChatSpeechToText,
+    #[allow(dead_code)]
+    ChatStarter(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -418,6 +451,8 @@ pub struct App {
     pub entering: Option<Vec<u16>>,
     /// the text being typed is a timer length in minutes, not a task
     pub entry_timer: bool,
+    /// the text being typed is a chat prompt on the Chat tab
+    pub entry_chat: bool,
     /// the notch was opened by the quick-add hotkey, so close it again afterwards
     capture_open: bool,
     /// output level 0..1 driving the music glow, smoothed
@@ -517,6 +552,27 @@ pub struct App {
     pub craft_toast: Option<(String, bool, Instant)>,
     pub apps_filter: AppsFilter,
     pub apps_scroll: usize,
+    // chat (OpenAI OAuth / ChatGPT Codex account)
+    pub codex: codex::Handle,
+    pub chat_signed_in: bool,
+    pub chat_signing_in: bool,
+    pub chat_streaming: bool,
+    pub chat_account: String,
+    pub chat_account_id: String,
+    pub chat_auth_path: String,
+    pub chat_models: Vec<codex::ModelOpt>,
+    pub chat_model: String,
+    pub chat_model_open: bool,
+    pub chat_model_query: String,
+    pub chat_model_scroll: usize,
+    pub chat_model_sel: usize,
+    pub chat_msgs: Vec<codex::ChatMessage>,
+    pub chat_scroll: usize,
+    pub chat_pinned_bottom: bool,
+    pub chat_draft: String,
+    pub chat_error: Option<String>,
+    pub chat_toast: Option<(String, bool, Instant)>,
+    pub chat_attachment: Option<codex::ChatAttachment>,
 }
 
 enum AlertAct {
@@ -533,6 +589,31 @@ impl App {
         let gfx = Gfx::new(max_w, max_h, scale)?;
         let craft = craft::start(hwnd.0 as isize);
         let craft_states = craft.data.lock().unwrap().states.clone();
+        let codex = codex::start(hwnd.0 as isize);
+        let (
+            chat_signed_in,
+            chat_signing_in,
+            chat_streaming,
+            chat_account,
+            chat_account_id,
+            chat_auth_path,
+            chat_models,
+            chat_model,
+            chat_msgs,
+        ) = {
+            let d = codex.data.lock().unwrap();
+            (
+                d.signed_in,
+                d.signing_in,
+                d.streaming,
+                d.account_label.clone(),
+                d.account_id.clone(),
+                d.auth_path.clone(),
+                d.models.clone(),
+                d.selected_model.clone(),
+                d.messages.clone(),
+            )
+        };
         let mut a = App {
             hwnd,
             gfx,
@@ -617,6 +698,7 @@ impl App {
             todos: store::load_todos(),
             entering: None,
             entry_timer: false,
+            entry_chat: false,
             capture_open: false,
             level: 0.0,
             squish: 0.0,
@@ -690,6 +772,26 @@ impl App {
             craft_toast: None,
             apps_filter: AppsFilter::All,
             apps_scroll: 0,
+            codex,
+            chat_signed_in,
+            chat_signing_in,
+            chat_streaming,
+            chat_account,
+            chat_account_id,
+            chat_auth_path,
+            chat_models,
+            chat_model,
+            chat_model_open: false,
+            chat_model_query: String::new(),
+            chat_model_scroll: 0,
+            chat_model_sel: 0,
+            chat_msgs,
+            chat_scroll: 0,
+            chat_pinned_bottom: true,
+            chat_draft: String::new(),
+            chat_error: None,
+            chat_toast: None,
+            chat_attachment: None,
         };
         a.update_monitor();
         sys::watch_mic(hwnd.0 as isize);
@@ -1047,6 +1149,7 @@ impl App {
                 Page::Stats => 1000,
                 Page::Apps if (self.picking && (self.app_list.is_none() || self.app_loading)) || self.craft_busy() => 33,
                 Page::Work if self.work_loading || self.work_searching || self.work_saving => 33,
+                Page::Chat if self.chat_signing_in || self.chat_streaming => 33,
                 _ => 0,
             }
         } else {
@@ -1848,6 +1951,25 @@ impl App {
                 };
             }
             self.render();
+        } else if self.page == Page::Chat {
+            if self.chat_model_open {
+                let max = self.chat_model_options().len().saturating_sub(CHAT_MODEL_DROP_ROWS);
+                self.chat_model_scroll = if delta < 0 {
+                    (self.chat_model_scroll + 1).min(max)
+                } else {
+                    self.chat_model_scroll.saturating_sub(1)
+                };
+            } else {
+                let lines = self.chat_wrapped_lines();
+                let max = lines.len().saturating_sub(CHAT_VIS_LINES);
+                self.chat_scroll = if delta < 0 {
+                    (self.chat_scroll + 1).min(max)
+                } else {
+                    self.chat_scroll.saturating_sub(1)
+                };
+                self.chat_pinned_bottom = self.chat_scroll >= max;
+            }
+            self.render();
         }
     }
 
@@ -1857,6 +1979,8 @@ impl App {
         }
         self.work_drop = None;
         self.work_drop_query.clear();
+        self.chat_model_open = false;
+        self.chat_model_query.clear();
         self.finish_entry(false, false);
         self.prev_page = self.page;
         self.page = p;
@@ -2237,6 +2361,127 @@ impl App {
                     }
                 }
             }
+            Act::ChatSignIn => {
+                self.chat_error = None;
+                let _ = self.codex.tx.send(codex::Req::StartLogin);
+            }
+            Act::ChatCancelSignIn => {
+                let _ = self.codex.tx.send(codex::Req::ReloadAuth);
+            }
+            Act::ChatReloadAuth => {
+                self.chat_error = None;
+                let _ = self.codex.tx.send(codex::Req::ReloadAuth);
+            }
+            Act::ChatOpenAuthDir => {
+                if let Some(parent) = std::path::Path::new(&self.chat_auth_path).parent() {
+                    sys::open(&parent.display().to_string(), "");
+                } else if let Ok(home) = std::env::var("USERPROFILE") {
+                    sys::open(&format!("{home}\\.codex"), "");
+                }
+            }
+            Act::ChatSignOut => {
+                let _ = self.codex.tx.send(codex::Req::Logout);
+            }
+            Act::ChatModelDrop => {
+                if self.chat_model_open {
+                    self.chat_model_open = false;
+                    self.chat_model_query.clear();
+                    self.finish_entry(false, true);
+                } else {
+                    self.open_chat_model_drop();
+                }
+            }
+            Act::ChatPickModel(i) => {
+                let picked = self.chat_model_options().get(i).map(|m| m.slug.clone());
+                self.chat_model_open = false;
+                self.chat_model_query.clear();
+                self.finish_entry(false, true);
+                if let Some(slug) = picked {
+                    self.chat_model = slug;
+                }
+            }
+            Act::ChatCloseDrop => {
+                self.chat_model_open = false;
+                self.chat_model_query.clear();
+                self.finish_entry(false, true);
+            }
+            Act::ChatClear => {
+                self.chat_msgs.clear();
+                self.chat_scroll = 0;
+                self.chat_error = None;
+            }
+            Act::ChatCopyLast => {
+                if let Some(last) = self
+                    .chat_msgs
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == codex::Role::Assistant)
+                {
+                    sys::set_clipboard_text(self.hwnd, &last.text);
+                    self.chat_toast = Some(("Copied reply".into(), true, Instant::now()));
+                }
+            }
+            Act::ChatPrompt => {
+                self.chat_model_open = false;
+                self.chat_model_query.clear();
+                self.start_entry();
+                if self.entering.is_some() {
+                    self.entry_chat = true;
+                    self.entering = Some(self.chat_draft.encode_utf16().collect());
+                }
+            }
+            Act::ChatSend => {
+                self.send_chat_message();
+            }
+            Act::ChatStop => {
+                let _ = self.codex.tx.send(codex::Req::ReloadAuth);
+            }
+            Act::ChatAttachFile => {
+                let hwnd = self.hwnd.0 as isize;
+                let tx = self.codex.tx.clone();
+                std::thread::spawn(move || {
+                    if let Some(path) = codex::pick_file_win32(hwnd) {
+                        if let Ok(att) = codex::ChatAttachment::from_path(path) {
+                            let _ = tx.send(codex::Req::AttachFile(att));
+                        }
+                    }
+                });
+            }
+            Act::ChatRemoveAttachment => {
+                self.chat_attachment = None;
+                let mut d = self.codex.data.lock().unwrap();
+                d.attachment = None;
+                drop(d);
+                self.render();
+            }
+            Act::ChatSpeechToText => {
+                self.chat_model_open = false;
+                self.chat_model_query.clear();
+                self.start_entry();
+                if self.entering.is_some() {
+                    self.entry_chat = true;
+                    self.entering = Some(self.chat_draft.encode_utf16().collect());
+                }
+                #[cfg(windows)]
+                unsafe {
+                    use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_LWIN};
+                    keybd_event(VK_LWIN.0 as u8, 0, Default::default(), 0);
+                    keybd_event(0x48, 0, Default::default(), 0); // 'H'
+                    keybd_event(0x48, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_LWIN.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+                }
+                self.chat_toast = Some(("Voice dictation active (speak now)".into(), true, Instant::now()));
+                self.render();
+            }
+            Act::ChatStarter(i) => {
+                let prompt = match i {
+                    0 => "Review this code for edge cases and performance bugs:",
+                    1 => "Draft concise sprint release notes for:",
+                    _ => "How can I implement:",
+                };
+                self.chat_draft = prompt.to_string();
+                self.send_chat_message();
+            }
         }
     }
 
@@ -2357,6 +2602,7 @@ impl App {
     fn start_entry(&mut self) {
         self.entry_timer = false;
         self.entry_search = false;
+        self.entry_chat = false;
         unsafe {
             let fg = GetForegroundWindow();
             if fg != self.hwnd {
@@ -2377,12 +2623,17 @@ impl App {
         let Some(buf) = self.entering.take() else {
             self.work_drop = None;
             self.work_drop_query.clear();
+            self.chat_model_open = false;
+            self.chat_model_query.clear();
             return;
         };
         self.make_activatable(false);
         let timer = std::mem::take(&mut self.entry_timer);
         let search = std::mem::take(&mut self.entry_search);
+        let chat = std::mem::take(&mut self.entry_chat);
         let was_drop = self.work_drop.take();
+        let was_chat_model_drop = self.chat_model_open;
+        self.chat_model_open = false;
         let drop_commit = was_drop.and_then(|kind| {
             if commit {
                 self.work_drop_options_for(kind)
@@ -2392,8 +2643,26 @@ impl App {
                 None
             }
         });
+        let chat_model_commit = if was_chat_model_drop && commit {
+            self.chat_model_options().get(self.chat_model_sel).map(|m| m.slug.clone())
+        } else {
+            None
+        };
         self.work_drop_query.clear();
-        if search && !commit && was_drop.is_none() {
+        self.chat_model_query.clear();
+        if let Some(slug) = chat_model_commit {
+            self.chat_model = slug;
+        } else if chat {
+            if commit {
+                let s = String::from_utf16_lossy(&buf).trim().to_string();
+                if !s.is_empty() {
+                    self.chat_draft = s;
+                    self.send_chat_message();
+                }
+            } else {
+                self.chat_draft = String::from_utf16_lossy(&buf);
+            }
+        } else if search && !commit && was_drop.is_none() {
             // Esc drops the filter; Enter keeps it
             if self.page == Page::Work {
                 self.work_filter.clear();
@@ -2460,7 +2729,7 @@ impl App {
                     Do::Redraw
                 }
                 c if self.entry_timer && !(0x30..=0x39).contains(&c) && c >= 0x20 => Do::Redraw,
-                c if c >= 0x20 && buf.len() < if self.entry_timer { 3 } else { 80 } => {
+                c if c >= 0x20 && buf.len() < if self.entry_timer { 3 } else if self.entry_chat { 1000 } else { 80 } => {
                     buf.push(c);
                     Do::Redraw
                 }
@@ -2470,7 +2739,11 @@ impl App {
         if self.entry_search {
             if let Some(buf) = &self.entering {
                 let t = String::from_utf16_lossy(buf);
-                if let Some(kind) = self.work_drop {
+                if self.chat_model_open {
+                    self.chat_model_query = t;
+                    self.chat_model_scroll = 0;
+                    self.chat_model_sel = 0;
+                } else if let Some(kind) = self.work_drop {
                     let changed = self.work_drop_query != t;
                     self.work_drop_query = t.clone();
                     if changed {
@@ -2500,8 +2773,13 @@ impl App {
                     self.clip_scroll = 0;
                 }
             }
-            if self.page == Page::Apps && self.work_drop.is_none() {
+            if self.page == Page::Apps && self.work_drop.is_none() && !self.chat_model_open {
                 self.ensure_picker_icons();
+            }
+        }
+        if self.entry_chat {
+            if let Some(buf) = &self.entering {
+                self.chat_draft = String::from_utf16_lossy(buf);
             }
         }
         match d {
@@ -2513,6 +2791,32 @@ impl App {
     }
 
     pub fn on_key_down(&mut self, vk: u16) {
+        if self.chat_model_open {
+            let len = self.chat_model_options().len();
+            if len == 0 {
+                return;
+            }
+            match vk {
+                0x28 => {
+                    // VK_DOWN
+                    self.chat_model_sel = (self.chat_model_sel + 1).min(len - 1);
+                    if self.chat_model_sel >= self.chat_model_scroll + CHAT_MODEL_DROP_ROWS {
+                        self.chat_model_scroll = self.chat_model_sel + 1 - CHAT_MODEL_DROP_ROWS;
+                    }
+                    self.render();
+                }
+                0x26 => {
+                    // VK_UP
+                    self.chat_model_sel = self.chat_model_sel.saturating_sub(1);
+                    if self.chat_model_sel < self.chat_model_scroll {
+                        self.chat_model_scroll = self.chat_model_sel;
+                    }
+                    self.render();
+                }
+                _ => {}
+            }
+            return;
+        }
         let Some(kind) = self.work_drop else {
             return;
         };
@@ -2856,6 +3160,144 @@ impl App {
             prev,
         });
         self.sync_timers();
+    }
+
+    // --------------------------------------------------- chat (Codex / OpenAI) --
+
+    pub fn on_codex(&mut self) {
+        let (toast, should_scroll) = {
+            let mut d = self.codex.data.lock().unwrap();
+            self.chat_signed_in = d.signed_in;
+            self.chat_signing_in = d.signing_in;
+            self.chat_streaming = d.streaming;
+            self.chat_account = d.account_label.clone();
+            self.chat_account_id = d.account_id.clone();
+            self.chat_auth_path = d.auth_path.clone();
+            self.chat_models = d.models.clone();
+            if !d.selected_model.is_empty() {
+                self.chat_model = d.selected_model.clone();
+            }
+            self.chat_msgs = d.messages.clone();
+            self.chat_error = d.error.clone();
+            self.chat_attachment = d.attachment.clone();
+            (d.toast.take(), d.streaming)
+        };
+        if let Some((msg, ok)) = toast {
+            self.chat_toast = Some((msg, ok, Instant::now()));
+        }
+        if should_scroll || self.chat_pinned_bottom {
+            let lines = self.chat_wrapped_lines();
+            if lines.len() > CHAT_VIS_LINES {
+                self.chat_scroll = lines.len() - CHAT_VIS_LINES;
+            } else {
+                self.chat_scroll = 0;
+            }
+        }
+        self.sync_timers();
+        if !self.hidden {
+            self.render();
+        }
+    }
+
+    pub fn chat_model_options(&self) -> Vec<&codex::ModelOpt> {
+        let q = self.chat_model_query.trim().to_ascii_lowercase();
+        self.chat_models
+            .iter()
+            .filter(|m| q.is_empty() || m.slug.to_ascii_lowercase().contains(&q))
+            .collect()
+    }
+
+    fn open_chat_model_drop(&mut self) {
+        self.chat_model_open = true;
+        self.chat_model_query.clear();
+        self.chat_model_scroll = 0;
+        self.chat_model_sel = 0;
+        let opts = self.chat_model_options();
+        if let Some(idx) = opts.iter().position(|m| m.slug.eq_ignore_ascii_case(&self.chat_model)) {
+            self.chat_model_sel = idx;
+            if idx >= CHAT_MODEL_DROP_ROWS {
+                self.chat_model_scroll = idx + 1 - CHAT_MODEL_DROP_ROWS;
+            }
+        }
+        self.start_entry();
+        if self.entering.is_some() {
+            self.entry_search = true;
+        }
+    }
+
+    pub fn send_chat_message(&mut self) {
+        let text = std::mem::take(&mut self.chat_draft).trim().to_string();
+        let attachment = self.chat_attachment.take();
+        if text.is_empty() && attachment.is_none() {
+            return;
+        }
+        if let Ok(mut d) = self.codex.data.lock() {
+            d.attachment = None;
+        }
+
+        let full_text = match &attachment {
+            Some(att) => {
+                if let Some(content) = &att.text_content {
+                    if text.is_empty() {
+                        format!("Here is `{}` ({}):\n```\n{}\n```", att.name, att.size_label(), content)
+                    } else {
+                        format!("{}\n\nAttached `{}` ({}):\n```\n{}\n```", text, att.name, att.size_label(), content)
+                    }
+                } else if text.is_empty() {
+                    format!("Attached file: `{}` ({})", att.name, att.size_label())
+                } else {
+                    format!("{}\n\n[Attached file: `{}` ({})]", text, att.name, att.size_label())
+                }
+            }
+            None => text,
+        };
+
+        self.chat_error = None;
+        self.chat_msgs.push(codex::ChatMessage {
+            role: codex::Role::User,
+            text: full_text,
+        });
+        self.chat_pinned_bottom = true;
+        let lines = self.chat_wrapped_lines();
+        if lines.len() > CHAT_VIS_LINES {
+            self.chat_scroll = lines.len() - CHAT_VIS_LINES;
+        }
+        let history = self.chat_msgs.clone();
+        let _ = self.codex.tx.send(codex::Req::SendChat {
+            model: self.chat_model.clone(),
+            history,
+        });
+        self.sync_timers();
+        self.render();
+    }
+
+    pub fn chat_wrapped_lines(&self) -> Vec<ChatLine> {
+        let mut out = Vec::new();
+        const MAX_COLS: usize = 56;
+        for msg in &self.chat_msgs {
+            let mut first = true;
+            for paragraph in msg.text.split('\n') {
+                let wrapped = wrap_chat_text(paragraph, MAX_COLS);
+                if wrapped.is_empty() {
+                    out.push(ChatLine {
+                        role: msg.role,
+                        text: String::new(),
+                        first_of_turn: first,
+                    });
+                    first = false;
+                } else {
+                    for line in wrapped {
+                        out.push(ChatLine {
+                            role: msg.role,
+                            text: line,
+                            first_of_turn: first,
+                        });
+                        first = false;
+                    }
+                }
+            }
+        }
+        out
     }
 
     // ------------------------------------------------------------- events ---
@@ -4285,6 +4727,28 @@ pub fn date_text(month: u32, day: u32, wday: u32) -> String {
     format!("{} {} {}", DAYS[(wday as usize).min(6)], day, MONTHS[(month as usize).clamp(1, 12) - 1])
 }
 
+/// Wraps a single paragraph of text into lines of at most `max_cols` characters.
+pub fn wrap_chat_text(s: &str, max_cols: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let words = s.split_whitespace();
+    let mut cur = String::new();
+    for w in words {
+        if cur.is_empty() {
+            cur.push_str(w);
+        } else if cur.chars().count() + 1 + w.chars().count() <= max_cols {
+            cur.push(' ');
+            cur.push_str(w);
+        } else {
+            out.push(cur);
+            cur = w.to_string();
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 /// How much of the workday [start, end) hours has passed at hh:mm; None outside the workday.
 pub fn day_fraction(hh: u32, mm: u32, start: u8, end: u8) -> Option<f32> {
     if end <= start {
@@ -4557,6 +5021,83 @@ mod glance_tests {
         save_png(&mut a, "apps_picker");
         assert!(a.hits.iter().any(|h| h.act == Act::AppDone));
         assert!(a.hits.iter().any(|h| h.act == Act::AppPick(0)));
+    }
+
+    #[test]
+    fn chat_codex_ui_hit_targets_and_snapshots() {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let scale = 2.0f32;
+        let mut a = App::new(HWND::default(), scale).expect("app");
+        a.expanded = true;
+        a.sw = Spring::new(EXP_W);
+        a.sh = Spring::new(EXP_H);
+        a.page = Page::Chat;
+        a.snap_tab();
+
+        let save_png = |a: &mut App, tag: &str| {
+            let (pw, ph) = ((EXP_W * scale) as i32, (EXP_H * scale) as i32);
+            a.gfx.begin(pw, ph).unwrap();
+            let mut hits = Vec::new();
+            crate::ui::draw(a, EXP_W, EXP_H, &mut hits);
+            let _ = a.gfx.end();
+            a.hits = hits;
+            if let Ok(dir) = std::env::var("WORK_PREVIEW_DIR") {
+                let (bw, _bh, buf) = a.gfx.snapshot();
+                let png = encode_bgra_png(pw as u32, ph as u32, bw as usize, &buf);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(format!("{dir}/{tag}.png"), png).unwrap();
+            }
+        };
+
+        // 1. Signed-out state: shows single "Sign in with ChatGPT" hero card
+        a.chat_signed_in = false;
+        a.chat_signing_in = false;
+        save_png(&mut a, "chat_signed_out");
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatSignIn));
+
+        // 2. Signed-in empty state: shows calm conversation canvas + model chip
+        a.chat_signed_in = true;
+        a.chat_account = "user@example.com \u{00B7} Plus".into();
+        a.chat_models = vec![
+            codex::ModelOpt::fallback("gpt-5.6-terra"),
+            codex::ModelOpt::fallback("gpt-5.6-luna"),
+            codex::ModelOpt::fallback("gpt-5.4-mini"),
+        ];
+        a.chat_model = "gpt-5.6-terra".into();
+        save_png(&mut a, "chat_empty_canvas");
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatModelDrop));
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatPrompt));
+
+        // 3. Multi-turn conversation view with streaming indicator and actions
+        a.chat_msgs = vec![
+            codex::ChatMessage {
+                role: codex::Role::User,
+                text: "How should I structure the Direct2D visual regression tests?".into(),
+            },
+            codex::ChatMessage {
+                role: codex::Role::Assistant,
+                text: "Use off-screen Direct2D render targets with software readback to verify hit targets and snapshot alignments without opening visible windows.".into(),
+            },
+        ];
+        a.chat_streaming = true;
+        a.spin_t = 0.6;
+        save_png(&mut a, "chat_conversation_streaming");
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatCopyLast));
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatClear));
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatSignOut));
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatStop));
+
+        // 4. Model dropdown overlay
+        a.chat_streaming = false;
+        a.chat_model_open = true;
+        a.chat_model_sel = 1;
+        save_png(&mut a, "chat_model_drop");
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatPickModel(0)));
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatPickModel(1)));
+        assert!(a.hits.iter().any(|h| h.act == Act::ChatCloseDrop));
     }
 
     fn encode_bgra_png(w: u32, h: u32, stride_px: usize, bgra: &[u8]) -> Vec<u8> {

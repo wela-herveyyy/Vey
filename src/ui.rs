@@ -391,7 +391,7 @@ pub fn squash(jiggle: f32) -> (f32, f32) {
     (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
 }
 
-const TAB_LABELS: [&str; 10] = ["Media", "Controls", "Today", "Work", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
+const TAB_LABELS: [&str; 11] = ["Media", "Controls", "Today", "Work", "Chat", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
 
 /// Where each tab sits in the top row, in the same order as `PAGES`.
 pub fn tab_rects() -> Vec<Rect> {
@@ -399,7 +399,7 @@ pub fn tab_rects() -> Vec<Rect> {
     let text_w = |s: &str| -> f32 {
         s.chars().map(|c| match c { 'i' | 'l' | 't' | 'f' | 'j' | 'r' | 'I' => 3.4, 'm' | 'w' | 'M' | 'W' => 9.6, _ => 6.7 }).sum()
     };
-    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 12.0).collect();
+    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 10.0).collect();
     let total: f32 = widths.iter().sum();
     let (left, right) = (44.0, EXP_W - 44.0);
     let gap = ((right - left - total) / (TAB_LABELS.len() as f32 - 1.0)).clamp(2.0, 12.0);
@@ -457,6 +457,7 @@ fn draw_expanded(a: &App, ca: f32, hits: &mut Vec<Hit>) {
         Page::Shelf => page_shelf(a, ca, hits),
         Page::Tasks => page_tasks(a, ca, hits),
         Page::Work => page_work(a, ca, hits),
+        Page::Chat => page_chat(a, ca, hits),
         Page::Stats => page_stats(a, ca),
         Page::Power => page_power(a, ca, hits),
         Page::Game => {
@@ -2238,6 +2239,528 @@ fn page_work_detail(a: &App, item: &crate::work::BacklogItem, ca: f32, hits: &mu
     }
 }
 
+// ------------------------------------------------------------------ chat ----
+
+fn page_chat(a: &App, ca: f32, hits: &mut Vec<Hit>) {
+    if !a.chat_signed_in {
+        page_chat_signed_out(a, ca, hits);
+        return;
+    }
+    page_chat_room(a, ca, hits);
+}
+
+fn page_chat_signed_out(a: &App, ca: f32, hits: &mut Vec<Hit>) {
+    let g = &a.gfx;
+    let f = &g.fonts;
+
+    // Header row: calm title + toast
+    g.text(
+        "ChatGPT & Codex",
+        Rect::new(26.0, 3.0, 180.0, 24.0),
+        &f.small,
+        T2.fade(ca),
+        Align::Left,
+    );
+
+    if let Some((msg, ok, t0)) = &a.chat_toast {
+        if t0.elapsed().as_secs_f32() < 4.0 {
+            let tc = if *ok { C_BAT } else { Color(0.98, 0.45, 0.55, 1.0) };
+            g.text(
+                &ellipsize(msg, 36),
+                Rect::new(EXP_W - 250.0, 3.0, 226.0, 24.0),
+                &f.tiny,
+                tc.fade(ca),
+                Align::Right,
+            );
+        }
+    }
+
+    // Hero action tile for signing in with ChatGPT only
+    let sign_r = Rect::new(24.0, 48.0, 552.0, 56.0);
+    if a.chat_signing_in {
+        card_tile(
+            a,
+            ca,
+            hits,
+            sign_r,
+            Some(Act::ChatCancelSignIn),
+            '\u{E711}',
+            Color(0.98, 0.45, 0.55, 1.0),
+            "Waiting for ChatGPT sign-in in browser\u{2026}",
+            T1,
+            "Click to cancel \u{00B7} Browser OAuth PKCE callback on localhost:1455",
+            C_MEM,
+            None,
+            true,
+            false,
+        );
+        spinner(g, sign_r.x + sign_r.w - 24.0, sign_r.cy(), 6.5, a.spin_t, C_MEM, ca);
+    } else {
+        card_tile(
+            a,
+            ca,
+            hits,
+            sign_r,
+            Some(Act::ChatSignIn),
+            '\u{E950}',
+            C_BAT,
+            "Sign in with ChatGPT",
+            T1,
+            "Bring your own ChatGPT or Codex account to chat inside Vey",
+            T3,
+            None,
+            false,
+            false,
+        );
+    }
+
+    if let Some(err) = &a.chat_error {
+        card_tile(
+            a,
+            ca,
+            hits,
+            Rect::new(24.0, 116.0, 552.0, 48.0),
+            None,
+            '\u{E783}',
+            Color(0.98, 0.45, 0.55, 1.0),
+            "Connection notice",
+            T1,
+            err,
+            T3,
+            None,
+            false,
+            false,
+        );
+    }
+}
+
+fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
+    let g = &a.gfx;
+    let f = &g.fonts;
+
+    // ---- Top Header Strip (x = 24..576, y = 2.0, h = 22.0)
+    let has_toast = a
+        .chat_toast
+        .as_ref()
+        .is_some_and(|(_, _, t0)| t0.elapsed().as_secs_f32() < 3.5);
+    let acct_w = if has_toast { 206.0 } else { 298.0 };
+    let acct_r = Rect::new(24.0, 2.0, acct_w, 22.0);
+    g.fill_rrect(acct_r, 11.0, SURF.fade(ca));
+    g.fill_circle(acct_r.x + 11.0, acct_r.cy(), 4.0, C_BAT.fade(ca));
+    let acct_text = if a.chat_account.is_empty() {
+        "ChatGPT Connected".to_string()
+    } else {
+        ellipsize(&a.chat_account, if has_toast { 27 } else { 42 })
+    };
+    g.text(
+        &acct_text,
+        Rect::new(acct_r.x + 21.0, acct_r.y, acct_r.w - 27.0, acct_r.h),
+        &f.tiny,
+        T2.fade(ca),
+        Align::Left,
+    );
+
+    if let Some((msg, ok, t0)) = &a.chat_toast {
+        if t0.elapsed().as_secs_f32() < 3.5 {
+            let tc = if *ok { C_BAT } else { Color(0.98, 0.45, 0.55, 1.0) };
+            g.text(
+                &format!("\u{2713} {msg}"),
+                Rect::new(236.0, 2.0, 94.0, 22.0),
+                &f.tiny,
+                tc.fade(ca),
+                Align::Left,
+            );
+        }
+    }
+
+    // Model selector chip
+    let mdl_r = Rect::new(EXP_W - 266.0, 2.0, 148.0, 22.0);
+    hits.push(Hit {
+        r: mdl_r,
+        act: Act::ChatModelDrop,
+    });
+    let mdl_bg = if a.chat_model_open || hot(a, Act::ChatModelDrop) {
+        HOVER
+    } else {
+        SURF
+    };
+    g.fill_rrect(mdl_r, 11.0, mdl_bg.fade(ca));
+    if a.chat_model_open {
+        g.fill_rrect(mdl_r, 11.0, C_UP.fade(0.14 * ca));
+    }
+    g.icon(
+        if a.chat_model_open { '\u{E721}' } else { '\u{E950}' },
+        Rect::new(mdl_r.x + 5.0, mdl_r.y, 18.0, mdl_r.h),
+        &f.icon14,
+        C_UP.fade(ca),
+    );
+    let mdl_label = if a.chat_model_open {
+        if a.chat_model_query.is_empty() {
+            "Filter model\u{2026}\u{2502}".to_string()
+        } else {
+            format!("{}\u{2502}", a.chat_model_query)
+        }
+    } else {
+        ellipsize(&a.chat_model, 17)
+    };
+    g.text(
+        &mdl_label,
+        Rect::new(mdl_r.x + 25.0, mdl_r.y, mdl_r.w - 44.0, mdl_r.h),
+        &f.tiny,
+        T1.fade(ca),
+        Align::Left,
+    );
+    g.icon(
+        '\u{E70D}',
+        Rect::new(mdl_r.x + mdl_r.w - 20.0, mdl_r.y, 16.0, mdl_r.h),
+        &f.icon14,
+        (if a.chat_model_open { C_UP } else { T3 }).fade(ca),
+    );
+
+    // Copy last reply button
+    let copy_r = Rect::new(EXP_W - 112.0, 2.0, 26.0, 22.0);
+    hits.push(Hit {
+        r: copy_r,
+        act: Act::ChatCopyLast,
+    });
+    g.fill_rrect(copy_r, 11.0, (if hot(a, Act::ChatCopyLast) { HOVER } else { SURF }).fade(ca));
+    g.icon(
+        '\u{E8C8}',
+        copy_r,
+        &f.icon14,
+        (if hot(a, Act::ChatCopyLast) { C_CPU } else { T2 }).fade(ca),
+    );
+
+    // Clear conversation button
+    let clr_r = Rect::new(EXP_W - 80.0, 2.0, 26.0, 22.0);
+    hits.push(Hit {
+        r: clr_r,
+        act: Act::ChatClear,
+    });
+    g.fill_rrect(clr_r, 11.0, (if hot(a, Act::ChatClear) { HOVER } else { SURF }).fade(ca));
+    g.icon(
+        '\u{E74D}',
+        clr_r,
+        &f.icon14,
+        (if hot(a, Act::ChatClear) { T1 } else { T2 }).fade(ca),
+    );
+
+    // Sign out button
+    let out_r = Rect::new(EXP_W - 48.0, 2.0, 24.0, 22.0);
+    hits.push(Hit {
+        r: out_r,
+        act: Act::ChatSignOut,
+    });
+    g.fill_rrect(out_r, 11.0, (if hot(a, Act::ChatSignOut) { HOVER } else { SURF }).fade(ca));
+    g.icon(
+        '\u{E8F8}',
+        out_r,
+        &f.icon14,
+        (if hot(a, Act::ChatSignOut) {
+            Color(0.98, 0.45, 0.55, 1.0)
+        } else {
+            T2
+        })
+        .fade(ca),
+    );
+
+    // ---- Conversation Area (y = 28.0..144.0)
+    let conv_r = Rect::new(24.0, 28.0, 552.0, 116.0);
+    g.fill_rrect(conv_r, 18.0, SURF.fade(ca));
+
+    if a.chat_msgs.is_empty() {
+        let ic = Rect::new(conv_r.x + 20.0, conv_r.cy() - 17.0, 34.0, 34.0);
+        g.fill_circle(ic.cx(), ic.cy(), 17.0, C_BAT.fade(0.18 * ca));
+        g.icon('\u{E950}', ic, &f.icon22, C_BAT.fade(ca));
+
+        g.text(
+            "ChatGPT",
+            Rect::new(conv_r.x + 66.0, conv_r.cy() - 18.0, conv_r.w - 82.0, 20.0),
+            &f.body,
+            T1.fade(ca),
+            Align::Left,
+        );
+        let sub = if let Some(err) = &a.chat_error {
+            err.as_str()
+        } else {
+            "Type a message below to start chatting with ChatGPT"
+        };
+        g.text(
+            sub,
+            Rect::new(conv_r.x + 66.0, conv_r.cy() + 4.0, conv_r.w - 82.0, 18.0),
+            &f.tiny,
+            (if a.chat_error.is_some() {
+                Color(0.98, 0.45, 0.55, 1.0)
+            } else {
+                T3
+            })
+            .fade(ca),
+            Align::Left,
+        );
+    } else {
+        let lines = a.chat_wrapped_lines();
+        let start = a.chat_scroll.min(lines.len().saturating_sub(CHAT_VIS_LINES));
+        let row_h = 21.0;
+        for row in 0..CHAT_VIS_LINES {
+            let Some(line) = lines.get(start + row) else { break };
+            let ry = conv_r.y + 6.0 + row as f32 * row_h;
+            let is_user = line.role == crate::codex::Role::User;
+            let (tint, glyph) = if is_user {
+                (C_CPU, '\u{E77B}')
+            } else {
+                (C_BAT, '\u{E950}')
+            };
+            if line.first_of_turn {
+                let ic = Rect::new(conv_r.x + 12.0, ry + 1.5, 18.0, 18.0);
+                g.fill_circle(ic.cx(), ic.cy(), 9.0, tint.fade(0.18 * ca));
+                g.icon(glyph, ic, &f.icon14, tint.fade(ca));
+            }
+            let tc = if is_user { C_CPU } else { T1 };
+            g.text(
+                &line.text,
+                Rect::new(conv_r.x + 38.0, ry, conv_r.w - 52.0, row_h),
+                &f.small,
+                tc.fade(ca),
+                Align::Left,
+            );
+        }
+        if lines.len() > CHAT_VIS_LINES {
+            let (top, h) = (conv_r.y + 8.0, conv_r.h - 16.0);
+            let track = Rect::new(conv_r.x + conv_r.w - 7.0, top, 3.0, h);
+            g.fill_rrect(track, 1.5, Color::white(0.08 * ca));
+            let th = (h * CHAT_VIS_LINES as f32 / lines.len() as f32).max(16.0);
+            let frac = start as f32 / (lines.len() - CHAT_VIS_LINES) as f32;
+            g.fill_rrect(
+                Rect::new(track.x, top + (h - th) * frac.clamp(0.0, 1.0), 3.0, th),
+                1.5,
+                C_BAT.fade(0.8 * ca),
+            );
+        }
+    }
+
+    // ---- Bottom Prompt Composer Card (x = 24..576, y = 150.0, h = 50.0)
+    let comp_r = Rect::new(24.0, 150.0, 552.0, 50.0);
+    let typing = a.entry_chat && a.entering.is_some();
+    let prompt_str = if typing {
+        let raw = a.chat_draft.as_str();
+        let n = raw.chars().count();
+        let tail: String = if n > 48 {
+            let skip = n - 48;
+            format!("\u{2026}{}", raw.chars().skip(skip).collect::<String>())
+        } else {
+            raw.to_string()
+        };
+        if tail.is_empty() {
+            "Type a message\u{2026}\u{2502}".to_string()
+        } else {
+            format!("{tail}\u{2502}")
+        }
+    } else if !a.chat_draft.is_empty() {
+        ellipsize(&a.chat_draft, 50)
+    } else {
+        "Message ChatGPT\u{2026}".to_string()
+    };
+    let prompt_col = if typing && a.chat_draft.is_empty() {
+        T2
+    } else if !a.chat_draft.is_empty() || typing {
+        T1
+    } else {
+        T2
+    };
+    let (sub_str, sub_col) = if let Some(err) = &a.chat_error {
+        (ellipsize(err, 60), Color(0.98, 0.45, 0.55, 1.0))
+    } else if let Some(att) = &a.chat_attachment {
+        (
+            format!("Attached: {} ({}) \u{00B7} Enter to send", ellipsize(&att.name, 22), att.size_label()),
+            C_MEM,
+        )
+    } else if a.chat_streaming {
+        (
+            "Streaming response from Codex\u{2026} \u{00B7} Click Stop to cancel".to_string(),
+            C_UP,
+        )
+    } else if typing {
+        (
+            "Enter to send \u{00B7} Ctrl+V to paste \u{00B7} Esc to cancel".to_string(),
+            C_CPU,
+        )
+    } else {
+        (
+            format!("Model: {} \u{00B7} Click to type a prompt", a.chat_model),
+            T3,
+        )
+    };
+
+    let k = hot_k(a, Act::ChatPrompt);
+    if typing {
+        g.fill_rrect(comp_r, 18.0, HOVER.fade(ca));
+        g.fill_rrect(comp_r, 18.0, C_CPU.fade(0.14 * ca));
+    } else {
+        g.fill_rrect(comp_r, 18.0, Color::white((0.09 + 0.08 * k) * ca));
+    }
+    hits.push(Hit {
+        r: Rect::new(comp_r.x, comp_r.y, comp_r.w - 114.0, comp_r.h),
+        act: Act::ChatPrompt,
+    });
+
+    let ic = Rect::new(comp_r.x + 12.0, comp_r.y + (comp_r.h - 34.0) / 2.0, 34.0, 34.0);
+    let prompt_tint = if a.chat_streaming { C_UP } else { C_CPU };
+    g.fill_circle(ic.cx(), ic.cy(), 17.0, prompt_tint.fade(0.16 * ca));
+    g.icon('\u{E8BD}', ic, &f.icon14, prompt_tint.fade(ca));
+
+    let tw = comp_r.w - 56.0 - 116.0;
+    let ty = comp_r.y + (comp_r.h - 43.0) / 2.0;
+    g.text(&prompt_str, Rect::new(comp_r.x + 56.0, ty, tw, 22.0), &f.body, prompt_col.fade(ca), Align::Left);
+    g.text(&sub_str, Rect::new(comp_r.x + 56.0, ty + 23.0, tw, 18.0), &f.tiny, sub_col.fade(ca), Align::Left);
+
+    // Button 1: Attach File
+    let att_r = Rect::new(comp_r.x + comp_r.w - 108.0, comp_r.y + 11.0, 30.0, 30.0);
+    let att_act = if a.chat_attachment.is_some() {
+        Act::ChatRemoveAttachment
+    } else {
+        Act::ChatAttachFile
+    };
+    hits.push(Hit { r: att_r, act: att_act });
+    let att_hot = hot(a, att_act);
+    let att_has = a.chat_attachment.is_some();
+    g.fill_circle(
+        att_r.cx(),
+        att_r.cy(),
+        15.0,
+        (if att_has {
+            C_MEM.fade(0.25)
+        } else if att_hot {
+            HOVER
+        } else {
+            Color::white(0.06)
+        })
+        .fade(ca),
+    );
+    g.icon(
+        if att_has { '\u{E711}' } else { '\u{E723}' },
+        att_r,
+        &f.icon14,
+        (if att_has { C_MEM } else if att_hot { T1 } else { T2 }).fade(ca),
+    );
+
+    // Button 2: Speech to Text (Microphone)
+    let mic_r = Rect::new(comp_r.x + comp_r.w - 72.0, comp_r.y + 11.0, 30.0, 30.0);
+    hits.push(Hit {
+        r: mic_r,
+        act: Act::ChatSpeechToText,
+    });
+    let mic_hot = hot(a, Act::ChatSpeechToText);
+    g.fill_circle(
+        mic_r.cx(),
+        mic_r.cy(),
+        15.0,
+        (if mic_hot { HOVER } else { Color::white(0.06) }).fade(ca),
+    );
+    g.icon(
+        '\u{E720}',
+        mic_r,
+        &f.icon14,
+        (if mic_hot { C_CPU } else { T2 }).fade(ca),
+    );
+
+    // Button 3: Send or Stop
+    let send_r = Rect::new(comp_r.x + comp_r.w - 36.0, comp_r.y + 11.0, 30.0, 30.0);
+    if a.chat_streaming {
+        hits.push(Hit { r: send_r, act: Act::ChatStop });
+        let sc = Color(0.98, 0.45, 0.55, 1.0);
+        g.fill_circle(send_r.cx(), send_r.cy(), 15.0, sc.fade(0.24 * ca));
+        g.icon('\u{E71A}', send_r, &f.icon14, sc.fade(ca));
+        spinner(g, comp_r.x + 29.0, comp_r.cy(), 16.5, a.spin_t, C_UP, ca);
+    } else {
+        let has_input = !a.chat_draft.trim().is_empty() || a.chat_attachment.is_some();
+        if has_input {
+            hits.push(Hit { r: send_r, act: Act::ChatSend });
+            let send_hot = hot(a, Act::ChatSend);
+            g.fill_circle(
+                send_r.cx(),
+                send_r.cy(),
+                15.0,
+                C_CPU.fade((if send_hot { 0.32 } else { 0.18 }) * ca),
+            );
+            g.icon('\u{E724}', send_r, &f.icon14, C_CPU.fade(ca));
+        } else {
+            g.fill_circle(send_r.cx(), send_r.cy(), 15.0, Color::white(0.05 * ca));
+            g.icon('\u{E724}', send_r, &f.icon14, T3.fade(ca));
+        }
+    }
+
+    // ---- Searchable Model Dropdown Overlay (drawn last so it floats cleanly above conversation)
+    if a.chat_model_open {
+        hits.push(Hit {
+            r: Rect::new(0.0, 0.0, EXP_W, EXP_H - CONTENT_Y),
+            act: Act::ChatCloseDrop,
+        });
+        hits.push(Hit {
+            r: mdl_r,
+            act: Act::ChatModelDrop,
+        });
+
+        let opts = a.chat_model_options();
+        let row_h = 22.0;
+        let vis_rows = opts.len().clamp(1, CHAT_MODEL_DROP_ROWS);
+        let drop_h = 6.0 + vis_rows as f32 * row_h;
+        let drop_r = Rect::new(306.0, 27.0, 270.0, drop_h);
+        g.fill_rrect(drop_r, 16.0, BLACK.fade(ca));
+        g.fill_rrect(drop_r, 16.0, Color::white(0.12 * ca));
+
+        if opts.is_empty() {
+            g.text("No matching models", drop_r, &f.small, T3.fade(ca), Align::Center);
+        } else {
+            for row in 0..CHAT_MODEL_DROP_ROWS {
+                let idx = a.chat_model_scroll + row;
+                let Some(m) = opts.get(idx) else { break };
+                let rr = Rect::new(
+                    drop_r.x + 4.0,
+                    drop_r.y + 3.0 + row as f32 * row_h,
+                    drop_r.w - 12.0,
+                    row_h - 1.0,
+                );
+                let oact = Act::ChatPickModel(idx);
+                hits.push(Hit { r: rr, act: oact });
+                let is_sel = idx == a.chat_model_sel;
+                let is_hot = hot(a, oact);
+                if is_hot || is_sel {
+                    g.fill_rrect(rr, 9.0, Color::white((if is_hot { 0.16 } else { 0.10 }) * ca));
+                }
+                let active = a.chat_model.eq_ignore_ascii_case(&m.slug);
+                g.fill_circle(rr.x + 11.0, rr.cy(), 4.0, (if active { C_UP } else { T3 }).fade(ca));
+                g.text(
+                    &m.slug,
+                    Rect::new(rr.x + 22.0, rr.y, rr.w - 46.0, rr.h),
+                    &f.small,
+                    T1.fade(ca),
+                    Align::Left,
+                );
+                if active {
+                    g.icon(
+                        '\u{E73E}',
+                        Rect::new(rr.x + rr.w - 22.0, rr.y, 18.0, rr.h),
+                        &f.icon14,
+                        C_UP.fade(ca),
+                    );
+                }
+            }
+            if opts.len() > CHAT_MODEL_DROP_ROWS {
+                let (top, h) = (drop_r.y + 6.0, drop_r.h - 12.0);
+                let track = Rect::new(drop_r.x + drop_r.w - 6.0, top, 3.0, h);
+                g.fill_rrect(track, 1.5, Color::white(0.08 * ca));
+                let th = (h * CHAT_MODEL_DROP_ROWS as f32 / opts.len() as f32).max(14.0);
+                let frac = a.chat_model_scroll as f32 / (opts.len() - CHAT_MODEL_DROP_ROWS) as f32;
+                g.fill_rrect(
+                    Rect::new(track.x, top + (h - th) * frac.clamp(0.0, 1.0), 3.0, th),
+                    1.5,
+                    C_UP.fade(0.8 * ca),
+                );
+            }
+        }
+    }
+}
+
 fn draw_calendar(a: &App, ca: f32) {
     let g = &a.gfx;
     let f = &g.fonts;
@@ -2348,10 +2871,10 @@ mod tests {
     }
 
     #[test]
-    fn ten_tabs_fit_between_pin_and_collapse() {
+    fn eleven_tabs_fit_between_pin_and_collapse() {
         assert_eq!(TAB_LABELS.len(), PAGES.len());
         let rects = tab_rects();
-        assert_eq!(rects.len(), 10);
+        assert_eq!(rects.len(), 11);
         assert!(rects[0].x >= 42.0, "first tab overlaps pin: {}", rects[0].x);
         let last = rects.last().unwrap();
         assert!(last.x + last.w <= EXP_W - 42.0, "last tab overlaps collapse: {}", last.x + last.w);
