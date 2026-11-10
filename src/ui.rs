@@ -47,6 +47,17 @@ pub fn draw(a: &App, w: f32, h: f32, hits: &mut Vec<Hit>) {
         g.fill_rrect(body, rad, a.accent.fade(0.03 + 0.15 * a.level));
         g.stroke_rrect(body, rad, a.accent.fade(0.2 + 0.7 * a.level), 1.0 + 2.2 * a.level);
     }
+    if a.chat_streaming && t < 0.05 {
+        let pulse = 0.5 + 0.5 * (a.spin_t * 3.5).sin();
+        let glow_col = C_BAT;
+        g.fill_rrect(body, rad, glow_col.fade((0.03 + 0.08 * pulse) * (1.0 - t)));
+        g.stroke_rrect(
+            Rect::new(body.x + 0.5, -rad, body.w - 1.0, body.h - 0.5),
+            rad,
+            glow_col.fade((0.35 + 0.45 * pulse) * (1.0 - t)),
+            1.5 + 0.8 * pulse,
+        );
+    }
 
     if a.alerting() && t < 0.05 {
         let pulse = 0.5 + 0.5 * (a.eq_phase * 0.9).sin();
@@ -272,6 +283,21 @@ fn draw_collapsed(a: &App, w: f32, ca: f32) {
                 g.fill_rrect(Rect::new(x, y, (len * frac).max(2.0), 2.0), 1.0, Color(0.55, 0.53, 0.49, ca));
             }
         }
+        if a.chat_streaming {
+            let pulse = 0.5 + 0.5 * (a.spin_t * 5.0).sin();
+            let tint = C_BAT;
+            let ix = w - 24.0;
+            let ic_r = Rect::new(ix - 10.0, (ch - 16.0) / 2.0, 16.0, 16.0);
+            g.fill_circle(ic_r.cx(), ic_r.cy(), 8.0, tint.fade(0.18 * pulse * ca));
+            g.icon('\u{E950}', ic_r, &f.icon14, mix(tint, Color::white(1.0), pulse * 0.4).fade(ca));
+            for d in 0..3 {
+                let phase = a.spin_t * 6.5 - d as f32 * 0.8;
+                let dy = (phase.sin() * 2.2).clamp(-2.5, 2.5);
+                let dot_x = ix - 26.0 + d as f32 * 4.5;
+                let dot_alpha = (0.35 + 0.55 * (0.5 + 0.5 * phase.sin())) * ca;
+                g.fill_circle(dot_x, ch / 2.0 + dy, 1.4, tint.fade(dot_alpha));
+            }
+        }
     }
 
     if timer && a.cfg.idle_focus_bar {
@@ -391,25 +417,35 @@ pub fn squash(jiggle: f32) -> (f32, f32) {
     (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
 }
 
-const TAB_LABELS: [&str; 11] = ["Media", "Controls", "Today", "Work", "Chat", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
+pub const TAB_ITEMS: [(char, &str); 11] = [
+    ('\u{E8D6}', "Media"),
+    ('\u{E713}', "Controls"),
+    ('\u{E787}', "Today"),
+    ('\u{E821}', "Work"),
+    ('\u{E950}', "Chat"),
+    ('\u{E9D9}', "Stats"),
+    ('\u{E77F}', "Clipboard"),
+    ('\u{E8F1}', "Shelf"),
+    ('\u{E71D}', "Apps"),
+    ('\u{E7FC}', "Games"),
+    ('\u{E7E8}', "Power"),
+];
+
+#[allow(dead_code)]
+pub const TAB_LABELS: [&str; 11] = ["Media", "Controls", "Today", "Work", "Chat", "Stats", "Clipboard", "Shelf", "Apps", "Games", "Power"];
 
 /// Where each tab sits in the top row, in the same order as `PAGES`.
 pub fn tab_rects() -> Vec<Rect> {
-    // rough text width: narrow letters count less, so the gaps between tabs look even
-    let text_w = |s: &str| -> f32 {
-        s.chars().map(|c| match c { 'i' | 'l' | 't' | 'f' | 'j' | 'r' | 'I' => 3.4, 'm' | 'w' | 'M' | 'W' => 9.6, _ => 6.7 }).sum()
-    };
-    let widths: Vec<f32> = TAB_LABELS.iter().map(|l| text_w(l) + 10.0).collect();
-    let total: f32 = widths.iter().sum();
-    let (left, right) = (44.0, EXP_W - 44.0);
-    let gap = ((right - left - total) / (TAB_LABELS.len() as f32 - 1.0)).clamp(2.0, 12.0);
-    let used = total + gap * (TAB_LABELS.len() as f32 - 1.0);
-    let mut x = left + (right - left - used) / 2.0;
-    widths
-        .iter()
-        .map(|w| {
-            let r = Rect::new(x, 8.0, *w, 28.0);
-            x += w + gap;
+    const TAB_W: f32 = 36.0;
+    let n = TAB_ITEMS.len();
+    let total = n as f32 * TAB_W;
+    let (left, right) = (46.0, EXP_W - 46.0);
+    let gap = (right - left - total) / (n as f32 - 1.0);
+    let mut x = left;
+    (0..n)
+        .map(|_| {
+            let r = Rect::new(x, 8.0, TAB_W, 28.0);
+            x += TAB_W + gap;
             r
         })
         .collect()
@@ -429,7 +465,7 @@ fn draw_expanded(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     hits.push(Hit { r: chev, act: Act::Collapse });
     g.icon('\u{E70E}', chev, &f.icon14, (if hot(a, Act::Collapse) { T1 } else { T3 }).fade(ca));
 
-    // the active-tab highlight slides from tab to tab; each label takes the accent
+    // the active-tab highlight slides from tab to tab; each icon takes the accent
     // colour in proportion to how much of the highlight is behind it
     let rects = tab_rects();
     let pill = Rect::new(a.tab_x, 8.0, a.tab_w, 28.0);
@@ -439,12 +475,12 @@ fn draw_expanded(a: &App, ca: f32, hits: &mut Vec<Hit>) {
         let act = Act::Tab(*p);
         hits.push(Hit { r, act });
         let k = hot_k(a, act);
-        if a.page != *p {
-            g.fill_rrect(r, 14.0, Color::white(0.07 * k * ca));
+        if a.page != *p && k > 0.01 {
+            g.fill_rrect(r, 14.0, Color::white(0.08 * k * ca));
         }
         let covered = ((pill.x + pill.w).min(r.x + r.w) - pill.x.max(r.x)).max(0.0) / r.w;
-        let col = mix(mix(T3, T2, k), a.accent, covered);
-        g.text(TAB_LABELS[i], r, &f.small, col.fade(ca), Align::Center);
+        let col = mix(mix(T3, T1, k), a.accent, covered);
+        g.icon(TAB_ITEMS[i].0, r, &f.icon14, col.fade(ca));
     }
 
     // the page itself, moved below the tab row; its hit boxes move with it
@@ -489,6 +525,27 @@ fn draw_expanded(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     }
     for h in &mut hits[start..] {
         h.r.y += CONTENT_Y;
+    }
+
+    // Floating title span tooltip for hovered tab (drawn on top of page content)
+    for (i, p) in PAGES.iter().enumerate() {
+        let act = Act::Tab(*p);
+        let k = hot_k(a, act);
+        if k > 0.05 {
+            let r = rects[i];
+            let label = TAB_ITEMS[i].1;
+            let tw = (label.len() as f32 * 7.5 + 20.0).max(52.0);
+            let tip_r = Rect::new(
+                (r.cx() - tw / 2.0).clamp(12.0, EXP_W - tw - 12.0),
+                38.0,
+                tw,
+                22.0,
+            );
+            g.fill_rrect(tip_r, 11.0, BLACK.fade(0.92 * k * ca));
+            g.fill_rrect(tip_r, 11.0, Color::white(0.14 * k * ca));
+            g.text(label, tip_r, &f.small, T1.fade(k * ca), Align::Center);
+            break;
+        }
     }
 }
 
@@ -2498,10 +2555,12 @@ fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
             Align::Left,
         );
     } else {
+        let has_target_tile = a.chat_active_doc.is_some();
         let lines = a.chat_wrapped_lines();
-        let start = a.chat_scroll.min(lines.len().saturating_sub(CHAT_VIS_LINES));
+        let vis_lines = if has_target_tile { 3 } else { CHAT_VIS_LINES };
+        let start = a.chat_scroll.min(lines.len().saturating_sub(vis_lines));
         let row_h = 21.0;
-        for row in 0..CHAT_VIS_LINES {
+        for row in 0..vis_lines {
             let Some(line) = lines.get(start + row) else { break };
             let ry = conv_r.y + 6.0 + row as f32 * row_h;
             let is_user = line.role == crate::codex::Role::User;
@@ -2516,50 +2575,248 @@ fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
                 g.icon(glyph, ic, &f.icon14, tint.fade(ca));
             }
             let tc = if is_user { C_CPU } else { T1 };
-            g.text(
-                &line.text,
-                Rect::new(conv_r.x + 38.0, ry, conv_r.w - 52.0, row_h),
-                &f.small,
-                tc.fade(ca),
-                Align::Left,
-            );
+            let is_last_row = start + row + 1 == lines.len();
+            let is_streaming_turn = a.chat_streaming && !is_user && is_last_row;
+
+            let (display_text, text_col) = if is_streaming_turn {
+                let cursor = if (a.spin_t * 5.0).fract() < 0.5 { "\u{2502}" } else { " " };
+                if line.text.trim().is_empty() {
+                    (format!("Thinking\u{2026} {cursor}"), C_BAT)
+                } else if line.text.contains("```") || line.text.contains("save:") {
+                    (format!("Generating contents\u{2026} Using MCP tools {cursor}"), C_BAT)
+                } else {
+                    (format!("{}{cursor}", line.text), tc)
+                }
+            } else {
+                (line.text.clone(), tc)
+            };
+
+            let matched_doc = if !is_user && !is_streaming_turn {
+                let trimmed = line.text.trim();
+                a.chat_docs.iter().enumerate().find(|(_, p)| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.eq_ignore_ascii_case(trimmed))
+                        .unwrap_or(false)
+                })
+            } else {
+                None
+            };
+
+            if let Some((doc_idx, _path)) = matched_doc {
+                let open_r = Rect::new(conv_r.x + conv_r.w - 104.0, ry + 1.0, 56.0, 19.0);
+                let rev_r = Rect::new(conv_r.x + conv_r.w - 44.0, ry + 1.0, 32.0, 19.0);
+
+                hits.push(Hit { r: open_r, act: Act::ChatOpenDoc(doc_idx) });
+                let open_hot = hot(a, Act::ChatOpenDoc(doc_idx));
+                g.fill_rrect(open_r, 9.5, (if open_hot { HOVER } else { Color::white(0.08) }).fade(ca));
+                g.text(
+                    "\u{2197} Open",
+                    Rect::new(open_r.x, open_r.y + 1.5, open_r.w, open_r.h),
+                    &f.tiny,
+                    (if open_hot { T1 } else { C_CPU }).fade(ca),
+                    Align::Center,
+                );
+
+                hits.push(Hit { r: rev_r, act: Act::ChatRevealDoc(doc_idx) });
+                let rev_hot = hot(a, Act::ChatRevealDoc(doc_idx));
+                g.fill_rrect(rev_r, 9.5, (if rev_hot { HOVER } else { Color::white(0.08) }).fade(ca));
+                g.icon('\u{ED25}', rev_r, &f.icon14, (if rev_hot { T1 } else { T2 }).fade(ca));
+
+                g.text(
+                    &display_text,
+                    Rect::new(conv_r.x + 38.0, ry, conv_r.w - 150.0, row_h),
+                    &f.small,
+                    C_CPU.fade(ca),
+                    Align::Left,
+                );
+            } else {
+                g.text(
+                    &display_text,
+                    Rect::new(conv_r.x + 38.0, ry, conv_r.w - 52.0, row_h),
+                    &f.small,
+                    text_col.fade(ca),
+                    Align::Left,
+                );
+            }
         }
-        if lines.len() > CHAT_VIS_LINES {
-            let (top, h) = (conv_r.y + 8.0, conv_r.h - 16.0);
+        if lines.len() > vis_lines {
+            let (top, h) = (conv_r.y + 8.0, if has_target_tile { conv_r.h - 52.0 } else { conv_r.h - 16.0 });
             let track = Rect::new(conv_r.x + conv_r.w - 7.0, top, 3.0, h);
             g.fill_rrect(track, 1.5, Color::white(0.08 * ca));
-            let th = (h * CHAT_VIS_LINES as f32 / lines.len() as f32).max(16.0);
-            let frac = start as f32 / (lines.len() - CHAT_VIS_LINES) as f32;
+            let th = (h * vis_lines as f32 / lines.len() as f32).max(16.0);
+            let frac = start as f32 / (lines.len() - vis_lines) as f32;
             g.fill_rrect(
                 Rect::new(track.x, top + (h - th) * frac.clamp(0.0, 1.0), 3.0, th),
                 1.5,
                 C_BAT.fade(0.8 * ca),
             );
         }
+
+        let target_doc_view = a.chat_active_doc.as_ref().map(|d| {
+            (
+                d.slug.as_str(),
+                d.app_name.as_str(),
+                d.file_name.as_str(),
+                &d.file_path,
+            )
+        });
+
+        if let Some((slug, app_name, file_name, file_path)) = target_doc_view {
+            let tile_r = Rect::new(conv_r.x + 8.0, conv_r.y + conv_r.h - 44.0, conv_r.w - 16.0, 38.0);
+            let is_edit = a.chat_doc_mode == crate::craft::ChatDocMode::EditExisting;
+            let (tint, glyph) = match slug {
+                "deckcraft" => (C_MEM, '\u{E8A5}'),
+                "gridcraft" => (C_BAT, '\u{E8EC}'),
+                "cadcraft" => (Color(0.98, 0.45, 0.55, 1.0), '\u{E821}'),
+                _ => (C_CPU, '\u{E8A5}'),
+            };
+
+            g.fill_rrect(tile_r, 14.0, Color::white(0.10).fade(ca));
+
+            // Circular badge
+            let ic = Rect::new(tile_r.x + 8.5, tile_r.y + (tile_r.h - 25.0) / 2.0, 25.0, 25.0);
+            g.fill_circle(ic.cx(), ic.cy(), 12.5, tint.fade(0.18 * ca));
+            g.icon(glyph, ic, &f.icon14, tint.fade(ca));
+
+            // Text on tile:
+            let tx_w = tile_r.w - 42.0 - 188.0;
+            g.text(
+                &ellipsize(file_name, 32),
+                Rect::new(tile_r.x + 42.0, tile_r.y + 4.0, tx_w, 16.0),
+                &f.small,
+                T1.fade(ca),
+                Align::Left,
+            );
+            let status_text = if is_edit {
+                format!("{app_name} \u{00B7} Target: Editing file in-place")
+            } else {
+                format!("{app_name} \u{00B7} Target: Creating new document")
+            };
+            g.text(
+                &status_text,
+                Rect::new(tile_r.x + 42.0, tile_r.y + 20.0, tx_w, 14.0),
+                &f.tiny,
+                (if is_edit { C_CPU } else { C_BAT }).fade(ca),
+                Align::Left,
+            );
+
+            // Right interactive pills:
+            // 1. "Edit" pill
+            let edit_r = Rect::new(tile_r.x + tile_r.w - 192.0, tile_r.y + 7.0, 50.0, 24.0);
+            hits.push(Hit {
+                r: edit_r,
+                act: Act::ChatSetDocMode(crate::craft::ChatDocMode::EditExisting),
+            });
+            let edit_hot = hot(a, Act::ChatSetDocMode(crate::craft::ChatDocMode::EditExisting));
+            g.fill_rrect(
+                edit_r,
+                12.0,
+                (if is_edit {
+                    C_CPU.fade(0.28)
+                } else if edit_hot {
+                    HOVER
+                } else {
+                    Color::white(0.06)
+                })
+                .fade(ca),
+            );
+            g.text(
+                if is_edit { "Edit \u{2713}" } else { "Edit" },
+                edit_r,
+                &f.tiny,
+                (if is_edit { C_CPU } else if edit_hot { T1 } else { T2 }).fade(ca),
+                Align::Center,
+            );
+
+            // 2. "+ New" pill
+            let new_r = Rect::new(tile_r.x + tile_r.w - 138.0, tile_r.y + 7.0, 54.0, 24.0);
+            hits.push(Hit {
+                r: new_r,
+                act: Act::ChatSetDocMode(crate::craft::ChatDocMode::CreateNew),
+            });
+            let new_hot = hot(a, Act::ChatSetDocMode(crate::craft::ChatDocMode::CreateNew));
+            g.fill_rrect(
+                new_r,
+                12.0,
+                (if !is_edit {
+                    C_BAT.fade(0.28)
+                } else if new_hot {
+                    HOVER
+                } else {
+                    Color::white(0.06)
+                })
+                .fade(ca),
+            );
+            g.text(
+                if !is_edit { "+ New \u{2713}" } else { "+ New" },
+                new_r,
+                &f.tiny,
+                (if !is_edit { C_BAT } else if new_hot { T1 } else { T2 }).fade(ca),
+                Align::Center,
+            );
+
+            // 3. Open & Reveal buttons
+            if let Some(doc_idx) = a.chat_docs.iter().position(|p| p == file_path) {
+                // Open directly in app
+                let open_r = Rect::new(tile_r.x + tile_r.w - 80.0, tile_r.y + 7.0, 24.0, 24.0);
+                hits.push(Hit {
+                    r: open_r,
+                    act: Act::ChatOpenDoc(doc_idx),
+                });
+                let open_hot = hot(a, Act::ChatOpenDoc(doc_idx));
+                g.fill_rrect(open_r, 12.0, (if open_hot { HOVER } else { Color::white(0.06) }).fade(ca));
+                g.icon('\u{E8A7}', open_r, &f.icon14, (if open_hot { T1 } else { T2 }).fade(ca));
+
+                // Reveal in File Explorer
+                let rev_r = Rect::new(tile_r.x + tile_r.w - 52.0, tile_r.y + 7.0, 24.0, 24.0);
+                hits.push(Hit {
+                    r: rev_r,
+                    act: Act::ChatRevealDoc(doc_idx),
+                });
+                let rev_hot = hot(a, Act::ChatRevealDoc(doc_idx));
+                g.fill_rrect(rev_r, 12.0, (if rev_hot { HOVER } else { Color::white(0.06) }).fade(ca));
+                g.icon('\u{ED25}', rev_r, &f.icon14, (if rev_hot { T1 } else { T2 }).fade(ca));
+            }
+
+            // 4. Detach / Clear target
+            let clear_r = Rect::new(tile_r.x + tile_r.w - 24.0, tile_r.y + 7.0, 20.0, 24.0);
+            hits.push(Hit {
+                r: clear_r,
+                act: Act::ChatClearTargetDoc,
+            });
+            let clear_hot = hot(a, Act::ChatClearTargetDoc);
+            g.icon('\u{E711}', clear_r, &f.icon14, (if clear_hot { T1 } else { T3 }).fade(ca));
+        }
     }
 
     // ---- Bottom Prompt Composer Card (x = 24..576, y = 150.0, h = 50.0)
     let comp_r = Rect::new(24.0, 150.0, 552.0, 50.0);
     let typing = a.entry_chat && a.entering.is_some();
-    let prompt_str = if typing {
-        let raw = a.chat_draft.as_str();
-        let n = raw.chars().count();
-        let tail: String = if n > 48 {
-            let skip = n - 48;
-            format!("\u{2026}{}", raw.chars().skip(skip).collect::<String>())
-        } else {
-            raw.to_string()
-        };
-        if tail.is_empty() {
-            "Type a message\u{2026}\u{2502}".to_string()
-        } else {
-            format!("{tail}\u{2502}")
+
+    let editor_lines: Vec<String> = if typing {
+        let raw: Vec<char> = a.chat_draft.chars().collect();
+        let cur = a.chat_cursor.min(raw.len());
+        let mut text_with_caret = String::with_capacity(raw.len() + 2);
+        text_with_caret.extend(&raw[..cur]);
+        let blink = (a.spin_t * 5.0).fract() < 0.5;
+        text_with_caret.push(if blink { '\u{2502}' } else { ' ' });
+        text_with_caret.extend(&raw[cur..]);
+
+        let mut lines = Vec::new();
+        for l in text_with_caret.lines() {
+            lines.push(l.to_string());
         }
+        if lines.is_empty() {
+            lines.push(format!("{}", if blink { "\u{2502}" } else { " " }));
+        }
+        lines
     } else if !a.chat_draft.is_empty() {
-        ellipsize(&a.chat_draft, 50)
+        a.chat_draft.lines().map(|s| s.to_string()).collect()
     } else {
-        "Message ChatGPT\u{2026}".to_string()
+        vec!["Message ChatGPT\u{2026}".to_string()]
     };
+
     let prompt_col = if typing && a.chat_draft.is_empty() {
         T2
     } else if !a.chat_draft.is_empty() || typing {
@@ -2567,6 +2824,7 @@ fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     } else {
         T2
     };
+
     let (sub_str, sub_col) = if let Some(err) = &a.chat_error {
         (ellipsize(err, 60), Color(0.98, 0.45, 0.55, 1.0))
     } else if let Some(att) = &a.chat_attachment {
@@ -2576,19 +2834,47 @@ fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
         )
     } else if a.chat_streaming {
         (
-            "Streaming response from Codex\u{2026} \u{00B7} Click Stop to cancel".to_string(),
-            C_UP,
+            "Streaming realtime response\u{2026} \u{00B7} Click \u{25A0} to stop".to_string(),
+            C_BAT,
         )
     } else if typing {
-        (
-            "Enter to send \u{00B7} Ctrl+V to paste \u{00B7} Esc to cancel".to_string(),
-            C_CPU,
-        )
+        if let Some(doc) = &a.chat_active_doc {
+            if a.chat_doc_mode == crate::craft::ChatDocMode::EditExisting {
+                (
+                    format!("Editing {} \u{00B7} Shift+Enter \u{21B5} Line \u{00B7} Enter \u{21B5} Send", ellipsize(&doc.file_name, 18)),
+                    C_CPU,
+                )
+            } else {
+                (
+                    format!("Creating new document \u{00B7} Shift+Enter \u{21B5} Line \u{00B7} Enter \u{21B5} Send"),
+                    C_BAT,
+                )
+            }
+        } else {
+            (
+                "Shift+Enter \u{21B5} Line \u{00B7} Enter \u{21B5} Send \u{00B7} Ctrl+V Paste".to_string(),
+                C_CPU,
+            )
+        }
     } else {
-        (
-            format!("Model: {} \u{00B7} Click to type a prompt", a.chat_model),
-            T3,
-        )
+        if let Some(doc) = &a.chat_active_doc {
+            if a.chat_doc_mode == crate::craft::ChatDocMode::EditExisting {
+                (
+                    format!("Target: {} (Edit mode) \u{00B7} Click to type", ellipsize(&doc.file_name, 22)),
+                    C_CPU,
+                )
+            } else {
+                (
+                    format!("Target: {} (+New mode) \u{00B7} Click to type", ellipsize(&doc.file_name, 22)),
+                    C_BAT,
+                )
+            }
+        } else {
+            (
+                format!("Model: {} \u{00B7} Click to type a prompt", a.chat_model),
+                T3,
+            )
+        }
     };
 
     let k = hot_k(a, Act::ChatPrompt);
@@ -2604,14 +2890,32 @@ fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     });
 
     let ic = Rect::new(comp_r.x + 12.0, comp_r.y + (comp_r.h - 34.0) / 2.0, 34.0, 34.0);
-    let prompt_tint = if a.chat_streaming { C_UP } else { C_CPU };
+    let prompt_tint = if a.chat_streaming {
+        C_BAT
+    } else if typing {
+        C_CPU
+    } else if a.chat_active_doc.is_some() {
+        C_MEM
+    } else {
+        C_CPU
+    };
     g.fill_circle(ic.cx(), ic.cy(), 17.0, prompt_tint.fade(0.16 * ca));
-    g.icon('\u{E8BD}', ic, &f.icon14, prompt_tint.fade(ca));
+    let editor_glyph = if typing { '\u{E70F}' } else { '\u{E8BD}' };
+    g.icon(editor_glyph, ic, &f.icon14, prompt_tint.fade(ca));
 
     let tw = comp_r.w - 56.0 - 116.0;
-    let ty = comp_r.y + (comp_r.h - 43.0) / 2.0;
-    g.text(&prompt_str, Rect::new(comp_r.x + 56.0, ty, tw, 22.0), &f.body, prompt_col.fade(ca), Align::Left);
-    g.text(&sub_str, Rect::new(comp_r.x + 56.0, ty + 23.0, tw, 18.0), &f.tiny, sub_col.fade(ca), Align::Left);
+    if editor_lines.len() >= 2 {
+        let line_count = editor_lines.len();
+        let line_a = &editor_lines[line_count - 2];
+        let line_b = &editor_lines[line_count - 1];
+        g.text(line_a, Rect::new(comp_r.x + 56.0, comp_r.y + 6.0, tw, 18.0), &f.body, prompt_col.fade(ca), Align::Left);
+        g.text(line_b, Rect::new(comp_r.x + 56.0, comp_r.y + 24.0, tw, 18.0), &f.body, prompt_col.fade(ca), Align::Left);
+    } else {
+        let ty = comp_r.y + (comp_r.h - 43.0) / 2.0;
+        let line_0 = editor_lines.first().map(|s| s.as_str()).unwrap_or("");
+        g.text(line_0, Rect::new(comp_r.x + 56.0, ty, tw, 22.0), &f.body, prompt_col.fade(ca), Align::Left);
+        g.text(&sub_str, Rect::new(comp_r.x + 56.0, ty + 23.0, tw, 18.0), &f.tiny, sub_col.fade(ca), Align::Left);
+    }
 
     // Button 1: Attach File
     let att_r = Rect::new(comp_r.x + comp_r.w - 108.0, comp_r.y + 11.0, 30.0, 30.0);
@@ -2667,10 +2971,11 @@ fn page_chat_room(a: &App, ca: f32, hits: &mut Vec<Hit>) {
     let send_r = Rect::new(comp_r.x + comp_r.w - 36.0, comp_r.y + 11.0, 30.0, 30.0);
     if a.chat_streaming {
         hits.push(Hit { r: send_r, act: Act::ChatStop });
+        let pulse = 0.5 + 0.5 * (a.spin_t * 6.0).sin();
         let sc = Color(0.98, 0.45, 0.55, 1.0);
-        g.fill_circle(send_r.cx(), send_r.cy(), 15.0, sc.fade(0.24 * ca));
+        g.fill_circle(send_r.cx(), send_r.cy(), 15.0, sc.fade((0.18 + 0.18 * pulse) * ca));
         g.icon('\u{E71A}', send_r, &f.icon14, sc.fade(ca));
-        spinner(g, comp_r.x + 29.0, comp_r.cy(), 16.5, a.spin_t, C_UP, ca);
+        spinner(g, comp_r.x + 29.0, comp_r.cy(), 16.5, a.spin_t, C_BAT, ca);
     } else {
         let has_input = !a.chat_draft.trim().is_empty() || a.chat_attachment.is_some();
         if has_input {

@@ -275,6 +275,10 @@ pub enum Act {
     ChatAttachFile,
     ChatRemoveAttachment,
     ChatSpeechToText,
+    ChatOpenDoc(usize),
+    ChatRevealDoc(usize),
+    ChatSetDocMode(craft::ChatDocMode),
+    ChatClearTargetDoc,
     #[allow(dead_code)]
     ChatStarter(usize),
 }
@@ -570,9 +574,13 @@ pub struct App {
     pub chat_scroll: usize,
     pub chat_pinned_bottom: bool,
     pub chat_draft: String,
+    pub chat_cursor: usize,
+    pub chat_active_doc: Option<craft::ActiveCraftDoc>,
+    pub chat_doc_mode: craft::ChatDocMode,
     pub chat_error: Option<String>,
     pub chat_toast: Option<(String, bool, Instant)>,
     pub chat_attachment: Option<codex::ChatAttachment>,
+    pub chat_docs: Vec<std::path::PathBuf>,
 }
 
 enum AlertAct {
@@ -789,9 +797,13 @@ impl App {
             chat_scroll: 0,
             chat_pinned_bottom: true,
             chat_draft: String::new(),
+            chat_cursor: 0,
+            chat_active_doc: None,
+            chat_doc_mode: craft::ChatDocMode::EditExisting,
             chat_error: None,
             chat_toast: None,
             chat_attachment: None,
+            chat_docs: Vec::new(),
         };
         a.update_monitor();
         sys::watch_mic(hwnd.0 as isize);
@@ -948,7 +960,8 @@ impl App {
         } else if self.timer_running() {
             (COL_TIMER_W, self.col_h())
         } else {
-            (COL_IDLE_W + self.glance_extra_w(), self.col_h())
+            let stream_extra = if self.chat_streaming { 42.0 } else { 0.0 };
+            (COL_IDLE_W + self.glance_extra_w() + stream_extra, self.col_h())
         }
     }
 
@@ -1143,7 +1156,9 @@ impl App {
             self.sec_on = false;
         }
         // the mini game ticks at 60 Hz only while its tab is open
-        let want: u32 = if self.expanded && !self.hidden {
+        let want: u32 = if !self.hidden && self.chat_streaming {
+            25
+        } else if self.expanded && !self.hidden {
             match self.page {
                 Page::Game if self.hub.is_playing() => 16,
                 Page::Stats => 1000,
@@ -2407,6 +2422,7 @@ impl App {
             }
             Act::ChatClear => {
                 self.chat_msgs.clear();
+                self.chat_docs.clear();
                 self.chat_scroll = 0;
                 self.chat_error = None;
             }
@@ -2427,7 +2443,9 @@ impl App {
                 self.start_entry();
                 if self.entering.is_some() {
                     self.entry_chat = true;
-                    self.entering = Some(self.chat_draft.encode_utf16().collect());
+                    let utf16: Vec<u16> = self.chat_draft.encode_utf16().collect();
+                    self.chat_cursor = utf16.len();
+                    self.entering = Some(utf16);
                 }
             }
             Act::ChatSend => {
@@ -2435,6 +2453,15 @@ impl App {
             }
             Act::ChatStop => {
                 let _ = self.codex.tx.send(codex::Req::ReloadAuth);
+            }
+            Act::ChatSetDocMode(mode) => {
+                self.chat_doc_mode = mode;
+                self.render();
+            }
+            Act::ChatClearTargetDoc => {
+                self.chat_active_doc = None;
+                self.chat_attachment = None;
+                self.render();
             }
             Act::ChatAttachFile => {
                 let hwnd = self.hwnd.0 as isize;
@@ -2460,7 +2487,9 @@ impl App {
                 self.start_entry();
                 if self.entering.is_some() {
                     self.entry_chat = true;
-                    self.entering = Some(self.chat_draft.encode_utf16().collect());
+                    let utf16: Vec<u16> = self.chat_draft.encode_utf16().collect();
+                    self.chat_cursor = utf16.len();
+                    self.entering = Some(utf16);
                 }
                 #[cfg(windows)]
                 unsafe {
@@ -2472,6 +2501,25 @@ impl App {
                 }
                 self.chat_toast = Some(("Voice dictation active (speak now)".into(), true, Instant::now()));
                 self.render();
+            }
+            Act::ChatOpenDoc(idx) => {
+                if let Some(path) = self.chat_docs.get(idx) {
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
+                    }
+                    self.render();
+                }
+            }
+            Act::ChatRevealDoc(idx) => {
+                if let Some(path) = self.chat_docs.get(idx) {
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("explorer.exe")
+                            .args(["/select,", &path.to_string_lossy()])
+                            .spawn();
+                    }
+                }
             }
             Act::ChatStarter(i) => {
                 let prompt = match i {
@@ -2717,20 +2765,76 @@ impl App {
                 return;
             };
             match c {
-                0x0D => Do::Commit,
+                0x0D => {
+                    #[cfg(windows)]
+                    let shift = unsafe {
+                        (windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x10) as u16 & 0x8000) != 0
+                    };
+                    #[cfg(not(windows))]
+                    let shift = false;
+
+                    if self.entry_chat && shift {
+                        let pos = self.chat_cursor.min(buf.len());
+                        buf.insert(pos, 0x0A);
+                        self.chat_cursor = pos + 1;
+                        Do::Redraw
+                    } else {
+                        Do::Commit
+                    }
+                }
                 0x1B => Do::Cancel,
                 0x08 => {
-                    buf.pop();
+                    if self.entry_chat {
+                        if self.chat_cursor > 0 && self.chat_cursor <= buf.len() {
+                            buf.remove(self.chat_cursor - 1);
+                            self.chat_cursor -= 1;
+                        }
+                    } else {
+                        buf.pop();
+                    }
                     Do::Redraw
                 }
                 // Ctrl+Backspace arrives as DEL: delete the word before the cursor
                 0x7F => {
-                    delete_word(buf);
+                    if self.entry_chat {
+                        let mut pos = self.chat_cursor.min(buf.len());
+                        while pos > 0 && (buf[pos - 1] == 0x20 || buf[pos - 1] == 0x0A || buf[pos - 1] == 0x09) {
+                            pos -= 1;
+                        }
+                        while pos > 0 && !(buf[pos - 1] == 0x20 || buf[pos - 1] == 0x0A || buf[pos - 1] == 0x09) {
+                            pos -= 1;
+                        }
+                        buf.drain(pos..self.chat_cursor.min(buf.len()));
+                        self.chat_cursor = pos;
+                    } else {
+                        delete_word(buf);
+                    }
+                    Do::Redraw
+                }
+                0x16 => {
+                    // Ctrl+V paste
+                    if self.entry_chat {
+                        #[cfg(windows)]
+                        if let Some(text) = sys::clipboard_text(self.hwnd) {
+                            let utf16: Vec<u16> = text.encode_utf16().collect();
+                            let pos = self.chat_cursor.min(buf.len());
+                            for (i, &ch) in utf16.iter().enumerate() {
+                                buf.insert(pos + i, ch);
+                            }
+                            self.chat_cursor = pos + utf16.len();
+                        }
+                    }
                     Do::Redraw
                 }
                 c if self.entry_timer && !(0x30..=0x39).contains(&c) && c >= 0x20 => Do::Redraw,
-                c if c >= 0x20 && buf.len() < if self.entry_timer { 3 } else if self.entry_chat { 1000 } else { 80 } => {
-                    buf.push(c);
+                c if c >= 0x20 && buf.len() < if self.entry_timer { 3 } else if self.entry_chat { 4000 } else { 80 } => {
+                    if self.entry_chat {
+                        let pos = self.chat_cursor.min(buf.len());
+                        buf.insert(pos, c);
+                        self.chat_cursor = pos + 1;
+                    } else {
+                        buf.push(c);
+                    }
                     Do::Redraw
                 }
                 _ => Do::Redraw,
@@ -2791,6 +2895,71 @@ impl App {
     }
 
     pub fn on_key_down(&mut self, vk: u16) {
+        if self.entry_chat {
+            let Some(buf) = self.entering.as_mut() else {
+                return;
+            };
+            match vk {
+                0x25 => {
+                    // VK_LEFT
+                    self.chat_cursor = self.chat_cursor.saturating_sub(1);
+                    self.render();
+                    return;
+                }
+                0x27 => {
+                    // VK_RIGHT
+                    self.chat_cursor = (self.chat_cursor + 1).min(buf.len());
+                    self.render();
+                    return;
+                }
+                0x24 => {
+                    // VK_HOME
+                    self.chat_cursor = 0;
+                    self.render();
+                    return;
+                }
+                0x23 => {
+                    // VK_END
+                    self.chat_cursor = buf.len();
+                    self.render();
+                    return;
+                }
+                0x2E => {
+                    // VK_DELETE
+                    if self.chat_cursor < buf.len() {
+                        buf.remove(self.chat_cursor);
+                        self.chat_draft = String::from_utf16_lossy(buf);
+                        self.render();
+                    }
+                    return;
+                }
+                0x56 => {
+                    // VK_V with Ctrl
+                    #[cfg(windows)]
+                    let ctrl = unsafe {
+                        (windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x11) as u16 & 0x8000) != 0
+                    };
+                    #[cfg(not(windows))]
+                    let ctrl = false;
+
+                    if ctrl {
+                        #[cfg(windows)]
+                        if let Some(text) = sys::clipboard_text(self.hwnd) {
+                            let utf16: Vec<u16> = text.encode_utf16().collect();
+                            let pos = self.chat_cursor.min(buf.len());
+                            for (i, &ch) in utf16.iter().enumerate() {
+                                buf.insert(pos + i, ch);
+                            }
+                            self.chat_cursor = pos + utf16.len();
+                            self.chat_draft = String::from_utf16_lossy(buf);
+                            self.render();
+                        }
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         if self.chat_model_open {
             let len = self.chat_model_options().len();
             if len == 0 {
@@ -2924,6 +3093,7 @@ impl App {
                 self.work_drop_scroll = self.work_drop_scroll.min(len.saturating_sub(WORK_DROP_ROWS));
             }
         }
+        self.retarget();
         self.sync_timers();
         if !self.hidden {
             self.render();
@@ -2946,6 +3116,7 @@ impl App {
             }
             self.craft_toast = Some((msg, ok, Instant::now()));
         }
+        self.retarget();
         self.sync_timers();
         if !self.hidden {
             self.render();
@@ -3180,6 +3351,21 @@ impl App {
             self.chat_msgs = d.messages.clone();
             self.chat_error = d.error.clone();
             self.chat_attachment = d.attachment.clone();
+            if let Some(att) = &self.chat_attachment {
+                if self.chat_active_doc.is_none() {
+                    if let Some(doc) = craft::detect_craft_doc_from_path(&att.path) {
+                        self.chat_active_doc = Some(doc);
+                        self.chat_doc_mode = craft::ChatDocMode::EditExisting;
+                    }
+                }
+            }
+            for m in &self.chat_msgs {
+                if let Some(card) = &m.tool_card {
+                    if !self.chat_docs.contains(&card.file_path) {
+                        self.chat_docs.push(card.file_path.clone());
+                    }
+                }
+            }
             (d.toast.take(), d.streaming)
         };
         if let Some((msg, ok)) = toast {
@@ -3193,6 +3379,7 @@ impl App {
                 self.chat_scroll = 0;
             }
         }
+        self.retarget();
         self.sync_timers();
         if !self.hidden {
             self.render();
@@ -3256,6 +3443,7 @@ impl App {
         self.chat_msgs.push(codex::ChatMessage {
             role: codex::Role::User,
             text: full_text,
+            tool_card: None,
         });
         self.chat_pinned_bottom = true;
         let lines = self.chat_wrapped_lines();
@@ -3263,18 +3451,103 @@ impl App {
             self.chat_scroll = lines.len() - CHAT_VIS_LINES;
         }
         let history = self.chat_msgs.clone();
+        let active_doc = self.chat_active_doc.clone();
+        let doc_mode = self.chat_doc_mode;
         let _ = self.codex.tx.send(codex::Req::SendChat {
             model: self.chat_model.clone(),
             history,
+            active_doc,
+            doc_mode,
         });
         self.sync_timers();
         self.render();
     }
 
+    pub fn resolve_chat_flag_point(raw: &str, user_prompt: Option<&str>) -> String {
+        let raw_lower = raw.to_ascii_lowercase();
+        let prompt_lower = user_prompt.map(|p| p.to_ascii_lowercase()).unwrap_or_default();
+        let req_slug = user_prompt.and_then(crate::codex::prompt_craft_slug);
+
+        if req_slug == Some("deckcraft") || prompt_lower.contains("slide") || prompt_lower.contains("deck") || prompt_lower.contains("presentation") {
+            if raw_lower.contains("save") {
+                "Using DeckCraft MCP tool save_presentation\u{2026}".to_string()
+            } else if raw_lower.contains("add_slide") || raw.len() > 140 {
+                "Using DeckCraft MCP tool add_slide\u{2026}".to_string()
+            } else if raw_lower.contains("open_presentation") || prompt_lower.contains("edit") {
+                "Using DeckCraft MCP tool open_presentation\u{2026}".to_string()
+            } else if raw.len() > 30 {
+                "Using DeckCraft MCP tool new_presentation\u{2026}".to_string()
+            } else {
+                "Thinking\u{2026}".to_string()
+            }
+        } else if req_slug == Some("gridcraft") || prompt_lower.contains("spreadsheet") || prompt_lower.contains("excel") || prompt_lower.contains("csv") {
+            if raw_lower.contains("save") {
+                "Using GridCraft MCP tool save_workbook\u{2026}".to_string()
+            } else if raw_lower.contains("write_range") || raw.len() > 140 {
+                "Using GridCraft MCP tool write_range\u{2026}".to_string()
+            } else if raw_lower.contains("open_workbook") || prompt_lower.contains("edit") {
+                "Using GridCraft MCP tool open_workbook\u{2026}".to_string()
+            } else if raw.len() > 30 {
+                "Using GridCraft MCP tool new_workbook\u{2026}".to_string()
+            } else {
+                "Thinking\u{2026}".to_string()
+            }
+        } else if req_slug == Some("cadcraft") || prompt_lower.contains("cad") || prompt_lower.contains("dxf") {
+            if raw_lower.contains("save") {
+                "Using CADCraft MCP tool save\u{2026}".to_string()
+            } else if raw_lower.contains("command_line") || raw.len() > 140 {
+                "Using CADCraft MCP tool command_line\u{2026}".to_string()
+            } else if raw.len() > 30 {
+                "Using CADCraft MCP tool new_drawing\u{2026}".to_string()
+            } else {
+                "Thinking\u{2026}".to_string()
+            }
+        } else if req_slug == Some("wordcraft") || prompt_lower.contains("wordcraft") || prompt_lower.contains("word") || prompt_lower.contains("essay") {
+            if raw_lower.contains("save") {
+                "Using WordCraft MCP tool save_document\u{2026}".to_string()
+            } else if raw_lower.contains("type_text") || raw.len() > 140 {
+                "Using WordCraft MCP tool type_text\u{2026}".to_string()
+            } else if raw_lower.contains("open_document") || prompt_lower.contains("edit") {
+                "Using WordCraft MCP tool open_document\u{2026}".to_string()
+            } else if raw.len() > 30 {
+                "Using WordCraft MCP tool new_document\u{2026}".to_string()
+            } else {
+                "Thinking\u{2026}".to_string()
+            }
+        } else if raw.len() > 120 {
+            "Synthesizing response\u{2026}".to_string()
+        } else if raw.len() > 30 {
+            "Formulating thoughts\u{2026}".to_string()
+        } else {
+            "Thinking\u{2026}".to_string()
+        }
+    }
+
     pub fn chat_wrapped_lines(&self) -> Vec<ChatLine> {
         let mut out = Vec::new();
         const MAX_COLS: usize = 56;
-        for msg in &self.chat_msgs {
+        let last_user_prompt = self
+            .chat_msgs
+            .iter()
+            .rev()
+            .find(|m| m.role == crate::codex::Role::User)
+            .map(|m| m.text.as_str());
+
+        for (m_idx, msg) in self.chat_msgs.iter().enumerate() {
+            let is_last_msg = m_idx + 1 == self.chat_msgs.len();
+            let is_streaming_assistant =
+                self.chat_streaming && is_last_msg && msg.role == crate::codex::Role::Assistant;
+
+            if is_streaming_assistant {
+                let flag = Self::resolve_chat_flag_point(&msg.text, last_user_prompt);
+                out.push(ChatLine {
+                    role: msg.role,
+                    text: flag,
+                    first_of_turn: true,
+                });
+                continue;
+            }
+
             let mut first = true;
             for paragraph in msg.text.split('\n') {
                 let wrapped = wrap_chat_text(paragraph, MAX_COLS);
@@ -5076,10 +5349,12 @@ mod glance_tests {
             codex::ChatMessage {
                 role: codex::Role::User,
                 text: "How should I structure the Direct2D visual regression tests?".into(),
+                tool_card: None,
             },
             codex::ChatMessage {
                 role: codex::Role::Assistant,
                 text: "Use off-screen Direct2D render targets with software readback to verify hit targets and snapshot alignments without opening visible windows.".into(),
+                tool_card: None,
             },
         ];
         a.chat_streaming = true;
@@ -5090,6 +5365,15 @@ mod glance_tests {
         assert!(a.hits.iter().any(|h| h.act == Act::ChatSignOut));
         assert!(a.hits.iter().any(|h| h.act == Act::ChatStop));
 
+        // 3b. Collapsed notch live AI streaming indicator & ambient breathing rim
+        a.expanded = false;
+        a.sw = Spring::new(COL_IDLE_W);
+        a.sh = Spring::new(a.col_h());
+        save_png(&mut a, "notch_collapsed_streaming");
+        a.expanded = true;
+        a.sw = Spring::new(EXP_W);
+        a.sh = Spring::new(EXP_H);
+
         // 4. Model dropdown overlay
         a.chat_streaming = false;
         a.chat_model_open = true;
@@ -5098,6 +5382,32 @@ mod glance_tests {
         assert!(a.hits.iter().any(|h| h.act == Act::ChatPickModel(0)));
         assert!(a.hits.iter().any(|h| h.act == Act::ChatPickModel(1)));
         assert!(a.hits.iter().any(|h| h.act == Act::ChatCloseDrop));
+
+        // 5. Tool card tile for ArtCraft generated documents
+        a.chat_streaming = false;
+        a.chat_model_open = false;
+        let sample_doc = crate::craft::CraftDocCard {
+            slug: "deckcraft".into(),
+            app_name: "DeckCraft".into(),
+            file_name: "Rust-Concurrency.deckcraft".into(),
+            file_path: std::path::PathBuf::from("C:\\Users\\hmapa\\Documents\\Vey\\Rust-Concurrency.deckcraft"),
+            size_label: "42.5 KB".into(),
+        };
+        a.chat_docs.push(sample_doc.file_path.clone());
+        a.chat_active_doc = Some(craft::ActiveCraftDoc {
+            slug: sample_doc.slug.clone(),
+            app_name: sample_doc.app_name.clone(),
+            file_name: sample_doc.file_name.clone(),
+            file_path: sample_doc.file_path.clone(),
+        });
+        a.chat_msgs.push(codex::ChatMessage {
+            role: codex::Role::Assistant,
+            text: format!("Here is the generated file for your request:\n{}", sample_doc.file_name),
+            tool_card: Some(sample_doc),
+        });
+        save_png(&mut a, "chat_with_craft_doc");
+        assert!(a.hits.iter().any(|h| matches!(h.act, Act::ChatOpenDoc(_))));
+        assert!(a.hits.iter().any(|h| matches!(h.act, Act::ChatRevealDoc(_))));
     }
 
     fn encode_bgra_png(w: u32, h: u32, stride_px: usize, bgra: &[u8]) -> Vec<u8> {

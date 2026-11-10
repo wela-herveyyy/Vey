@@ -28,12 +28,17 @@ Written in Rust. No webview, no framework, no runtime. One small <code>.exe</cod
 
 ## What's New in Vey
 
-1. **Controls Tile Design System**:
+1. **ChatGPT & Codex (Chat Tab)**:
+   - Bring your own ChatGPT account and authorize in your browser with OAuth PKCE.
+   - Choose from available Codex models, stream responses, attach files, and stop or copy replies.
+   - Create or edit supported ArtCraft documents from chat, then open them in their native apps.
+
+2. **Controls Tile Design System**:
    - Modern borderless matte cards (`SURF` / `HOVER`) resting on the black notch canvas.
    - Tinted circular icon badges with semantic accent colors and crisp Segoe Fluent / MDL2 icons.
    - Standardized two-line stacked typography and strict 2-column grid alignment across tabs.
 
-2. **Craft Suite Integration (Apps Tab)**:
+3. **Craft Suite Integration (Apps Tab)**:
    - Native discovery, installation, and launching for the **ArtCraft** creative tools:
      - **Craft Launcher**: Central craft hub and environment launcher.
      - **GridCraft**: Ultra-fast, pure Rust spreadsheets.
@@ -41,18 +46,63 @@ Written in Rust. No webview, no framework, no runtime. One small <code>.exe</cod
      - **WordCraft**: Lightweight, fast word processor in pure Rust.
    - Real-time download progress, installation states, and direct executable detection.
 
-3. **Sprint Backlog & Work Tracker (Work Tab)**:
+4. **Sprint Backlog & Work Tracker (Work Tab)**:
    - Built-in agile sprint backlog integrated with ERPNext.
    - Priority indicators, task status toggles, assignee drop-downs, and instant browser deep links.
 
-4. **Pixel Art Brand Identity**:
+5. **Pixel Art Brand Identity**:
    - Brand new retro-tech wordmark logo, launcher icon, and system tray iconography crafted in pixel art.
+
+---
+
+## Screenshots
+
+Rendered from Vey's native UI. The panel gallery covers every tab; the Chat gallery shows its main conversation and document workflows.
+
+### Panel tabs
+
+<table>
+  <tr>
+    <td align="center"><img src="assets/screenshots/media.png" alt="Media tab" width="300"><br><b>Media</b></td>
+    <td align="center"><img src="assets/screenshots/controls.png" alt="Controls tab" width="300"><br><b>Controls</b></td>
+    <td align="center"><img src="assets/screenshots/tasks.png" alt="Today tab" width="300"><br><b>Today</b></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/work.png" alt="Work tab" width="300"><br><b>Work</b></td>
+    <td align="center"><img src="assets/screenshots/chat.png" alt="Chat tab sign-in screen" width="300"><br><b>Chat</b></td>
+    <td align="center"><img src="assets/screenshots/stats.png" alt="Stats tab" width="300"><br><b>Stats</b></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/clipboard.png" alt="Clipboard tab" width="300"><br><b>Clipboard</b></td>
+    <td align="center"><img src="assets/screenshots/shelf.png" alt="Shelf tab" width="300"><br><b>Shelf</b></td>
+    <td align="center"><img src="assets/screenshots/apps.png" alt="Apps tab" width="300"><br><b>Apps</b></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/game.png" alt="Games tab" width="300"><br><b>Games</b></td>
+    <td align="center"><img src="assets/screenshots/power.png" alt="Power tab" width="300"><br><b>Power</b></td>
+  </tr>
+</table>
+
+### ChatGPT & Codex
+
+Sign in with ChatGPT, choose a model, and work with streamed replies or ArtCraft documents without leaving the notch.
+
+<table>
+  <tr>
+    <td align="center"><img src="assets/screenshots/chat_empty_canvas.png" alt="ChatGPT conversation canvas" width="380"><br><b>Start a conversation</b></td>
+    <td align="center"><img src="assets/screenshots/chat_conversation_streaming.png" alt="Streaming Codex response" width="380"><br><b>Streaming response</b></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/chat_model_drop.png" alt="Codex model selector" width="380"><br><b>Choose a model</b></td>
+    <td align="center"><img src="assets/screenshots/chat_with_craft_doc.png" alt="Chat with an ArtCraft document target" width="380"><br><b>Create or edit a Craft document</b></td>
+  </tr>
+</table>
 
 ---
 
 ## Features
 
-- **Notch** at the top centre. Click it and a panel opens with tabs: **Media**, **Controls**, **Today** (focus timer, to-dos, calendar), **Work** (agile backlog), **Stats**, **Clipboard**, **Shelf** (drop files on it), **Apps** (pinned apps & Craft Suite), **Games**, and **Power**.
+- **Notch** at the top centre. Click it and a panel opens with tabs: **Media**, **Controls**, **Today** (focus timer, to-dos, calendar), **Work** (agile backlog), **Chat** (ChatGPT & Codex), **Stats**, **Clipboard**, **Shelf** (drop files on it), **Apps** (pinned apps & Craft Suite), **Games**, and **Power**.
 - **Top bar** along the top of the screen: active app name, Wi-Fi, Bluetooth, sound, brightness, battery, and clock, each with a rich dropdown (join Wi-Fi networks, connect Bluetooth devices, volume/brightness sliders, calendar). Optional clock styles and CPU / memory read-outs.
 - **A little life**: a desktop buddy character on the bar, scripted scenes, an arcade with four mouse-only games, and small tactile reactions on the pill (squish on click, glow with music, confetti when the focus timer ends).
 - **Smart pill**: the notch proactively displays context without a click:
@@ -141,6 +191,7 @@ packaging/linux/package.sh
 - **Controls**: Quick access to Snipping Tool screenshot and common Windows settings (Display, Sound, Network, Power & Battery, All Settings).
 - **Today**: Focus timer (Pomodoro 5/15/25/50m or custom), persistent to-do checklist, and interactive month calendar.
 - **Work**: ERPNext Sprint Backlog integration. Track active sprint tasks, priorities, update statuses, reassign teammates, or jump directly to ERPNext in browser.
+- **Chat**: ChatGPT account sign-in, selectable Codex models, streamed conversations, file attachments, and ArtCraft document creation or editing.
 - **Stats**: Live animated CPU and RAM meters with history graphs, battery percentage, and system uptime.
 - **Clipboard**: Last 20 copied text snippets with search filtering. Star items to permanently pin them.
 - **Shelf**: Drag & drop staging zone for files and folders. Keeps items handy across workspaces.

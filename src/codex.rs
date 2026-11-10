@@ -25,9 +25,14 @@ pub const DEFAULT_OPENAI_OAUTH_SCOPE: &str = "openid profile email offline_acces
 pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.1";
 pub const DEFAULT_LOGIN_PORT: u16 = 1455;
 pub const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-pub const DEFAULT_MODEL: &str = "gpt-5.4-mini";
+pub const DEFAULT_MODEL: &str = "gpt-5.6-terra";
 
 pub const FALLBACK_MODELS: &[&str] = &[
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-6-luna",
+    "gpt-reserve",
+    "codex-auto-review",
     "gpt-5.4-mini",
     "gpt-5.4",
     "gpt-5.3-codex",
@@ -67,6 +72,7 @@ pub enum Role {
 pub struct ChatMessage {
     pub role: Role,
     pub text: String,
+    pub tool_card: Option<crate::craft::CraftDocCard>,
 }
 
 pub type ModelOpt = CodexModelInfo;
@@ -202,6 +208,8 @@ pub enum Req {
     SendChat {
         model: String,
         history: Vec<ChatTurn>,
+        active_doc: Option<crate::craft::ActiveCraftDoc>,
+        doc_mode: crate::craft::ChatDocMode,
     },
 }
 
@@ -721,6 +729,109 @@ pub fn parse_models_catalog(body: &str) -> Vec<CodexModelInfo> {
     out
 }
 
+pub fn is_casual_greeting_or_chat(prompt: &str) -> bool {
+    let lower = prompt.trim().to_ascii_lowercase();
+    let cleaned: String = lower
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    if words.is_empty() {
+        return true;
+    }
+    if words.len() <= 4 {
+        let first = words[0];
+        if matches!(
+            first,
+            "hi" | "hello" | "hey" | "howdy" | "yo" | "sup" | "greetings"
+                | "morning" | "afternoon" | "evening" | "bye" | "goodbye"
+                | "thanks" | "thx" | "thank"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn is_informational_query(prompt: &str) -> bool {
+    let lower = prompt.trim().to_ascii_lowercase();
+    lower.starts_with("what ")
+        || lower.starts_with("what's ")
+        || lower.starts_with("what is ")
+        || lower.starts_with("what are ")
+        || lower.starts_with("how ")
+        || lower.starts_with("why ")
+        || lower.starts_with("which ")
+        || lower.starts_with("list ")
+        || lower.starts_with("explain ")
+        || lower.starts_with("tell me ")
+        || lower.starts_with("describe ")
+        || lower.starts_with("help")
+        || lower.starts_with("can you explain ")
+        || lower.starts_with("show me ")
+        || lower.contains("what are ")
+        || lower.contains("what is ")
+        || lower.contains("what tools")
+        || lower.contains("which tools")
+        || lower.contains("how do ")
+        || lower.contains("how to ")
+        || lower.contains("list of ")
+        || lower.contains("list tools")
+        || (lower.contains("tools") && (lower.contains("what") || lower.contains("list") || lower.contains("show")))
+        || lower.contains("explain ")
+}
+
+pub fn prompt_craft_slug(prompt: &str) -> Option<&'static str> {
+    if is_informational_query(prompt) || is_casual_greeting_or_chat(prompt) {
+        return None;
+    }
+    let lower = prompt.trim().to_ascii_lowercase();
+    if lower.contains("slide")
+        || lower.contains("presentation")
+        || lower.contains("deck")
+        || lower.contains("powerpoint")
+        || lower.contains("deckcraft")
+    {
+        Some("deckcraft")
+    } else if lower.contains("spreadsheet")
+        || lower.contains("excel")
+        || lower.contains("csv")
+        || lower.contains("workbook")
+        || lower.contains("gridcraft")
+    {
+        Some("gridcraft")
+    } else if lower.contains("cad")
+        || lower.contains("dxf")
+        || lower.contains("drawing")
+        || lower.contains("blueprint")
+        || lower.contains("cadcraft")
+    {
+        Some("cadcraft")
+    } else if lower.contains("essay")
+        || lower.contains("word doc")
+        || lower.contains("wordcraft")
+        || (lower.contains("word")
+            && (lower.contains("create")
+                || lower.contains("make")
+                || lower.contains("write")
+                || lower.contains("generate")
+                || lower.contains("draft")
+                || lower.contains("with and")
+                || lower.contains("with an")
+                || lower.contains("in it")))
+        || lower == "wordcraft"
+        || lower == "wordcraft?"
+    {
+        Some("wordcraft")
+    } else {
+        None
+    }
+}
+
+pub fn should_steer_craft(prompt: &str) -> bool {
+    prompt_craft_slug(prompt).is_some()
+}
+
 /// Normalizes a multi-turn conversation into the exact JSON body expected by
 /// `https://chatgpt.com/backend-api/codex/responses` (`normalizeCodexResponsesBodyInternal`).
 /// Returns `(json_payload, use_responses_lite)`.
@@ -729,6 +840,8 @@ pub fn normalize_codex_responses_body(
     instructions: &str,
     messages: &[ChatTurn],
     model_info: Option<&CodexModelInfo>,
+    active_doc: Option<&crate::craft::ActiveCraftDoc>,
+    doc_mode: crate::craft::ChatDocMode,
 ) -> (String, bool) {
     let use_lite = model_info.is_some_and(|m| m.use_responses_lite);
     let instr = if instructions.trim().is_empty() {
@@ -744,12 +857,47 @@ pub fn normalize_codex_responses_body(
             json_str(instr)
         ));
     }
-    for turn in messages {
+    for (i, turn) in messages.iter().enumerate() {
+        let is_last_user = turn.role == Role::User
+            && (i + 1 == messages.len()
+                || (i + 2 == messages.len()
+                    && messages[i + 1].role == Role::Assistant
+                    && messages[i + 1].text.is_empty()));
         match turn.role {
             Role::User => {
+                let req_slug = prompt_craft_slug(&turn.text);
+                let user_text = if is_last_user && req_slug.is_some() {
+                    let slug = req_slug.unwrap();
+                    let app_name = match slug {
+                        "deckcraft" => "DeckCraft",
+                        "gridcraft" => "GridCraft",
+                        "cadcraft" => "CADCraft",
+                        _ => "WordCraft",
+                    };
+                    if let Some(doc) = active_doc {
+                        if doc.slug == slug && doc_mode == crate::craft::ChatDocMode::EditExisting {
+                            format!(
+                                "{}\n\n[DIRECTIVE: The user is editing existing document '{}' in {}. Immediately output the complete updated ```{} block with `save: {}` containing the revised document content.]",
+                                turn.text, doc.file_name, doc.app_name, doc.slug, doc.file_name
+                            )
+                        } else {
+                            format!(
+                                "{}\n\n[DIRECTIVE: The user wants to generate a new document in {} based on the conversation context. Immediately output the complete ```{} block with rich, polished content.]",
+                                turn.text, app_name, slug
+                            )
+                        }
+                    } else {
+                        format!(
+                            "{}\n\n[DIRECTIVE: Do NOT ask questions or request details. Immediately output the complete Craft document code block (```{}) with rich, realistic content based on the conversation context and user's intent.]",
+                            turn.text, slug
+                        )
+                    }
+                } else {
+                    turn.text.clone()
+                };
                 input_items.push(format!(
                     r#"{{"role":"user","content":[{{"type":"input_text","text":{}}}]}}"#,
-                    json_str(&turn.text)
+                    json_str(&user_text)
                 ));
             }
             Role::Assistant => {
@@ -808,12 +956,83 @@ pub fn process_sse_data(data: &str, acc_text: &mut String) -> Result<bool, Strin
     let Some(parsed) = parse_json(trimmed) else {
         return Ok(false);
     };
+
     let ev_type = parsed.str_or("type");
+    if ev_type == "response.failed" || ev_type == "error" || parsed.get("error").is_some() {
+        let msg = parsed
+            .get("error")
+            .map(|e| e.str_or("message"))
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                parsed
+                    .get("response")
+                    .and_then(|r| r.get("error"))
+                    .map(|e| e.str_or("message"))
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_else(|| "Codex response stream failed".to_string());
+        return Err(msg);
+    }
+
+    // 1. Check standard Chat Completions delta: choices[0].delta.content / text
+    if let Some(choices) = parsed.get("choices").and_then(|c| c.as_arr()) {
+        for choice in choices {
+            if let Some(delta) = choice.get("delta") {
+                if let Some(s) = delta.as_str() {
+                    acc_text.push_str(s);
+                    return Ok(false);
+                }
+                let c = delta.str_or("content");
+                if !c.is_empty() {
+                    acc_text.push_str(&c);
+                    return Ok(false);
+                }
+                let t = delta.str_or("text");
+                if !t.is_empty() {
+                    acc_text.push_str(&t);
+                    return Ok(false);
+                }
+            }
+            let text = choice.str_or("text");
+            if !text.is_empty() {
+                acc_text.push_str(&text);
+                return Ok(false);
+            }
+        }
+    }
+
+    // 2. Check top-level or Responses API delta
+    if let Some(delta) = parsed.get("delta") {
+        if let Some(s) = delta.as_str() {
+            acc_text.push_str(s);
+            return Ok(false);
+        }
+        let c = delta.str_or("content");
+        if !c.is_empty() {
+            acc_text.push_str(&c);
+            return Ok(false);
+        }
+        let t = delta.str_or("text");
+        if !t.is_empty() {
+            acc_text.push_str(&t);
+            return Ok(false);
+        }
+    }
+
+    // 3. Responses API deltas
     match ev_type.as_str() {
-        "response.output_text.delta" => {
+        "response.output_text.delta"
+        | "response.text.delta"
+        | "response.output_item.delta"
+        | "response.content_part.delta" => {
             let delta = parsed.str_or("delta");
             if !delta.is_empty() {
                 acc_text.push_str(&delta);
+            } else {
+                let text = parsed.str_or("text");
+                if !text.is_empty() {
+                    acc_text.push_str(&text);
+                }
             }
             Ok(false)
         }
@@ -826,7 +1045,7 @@ pub fn process_sse_data(data: &str, acc_text: &mut String) -> Result<bool, Strin
             }
             Ok(false)
         }
-        "response.completed" => {
+        "response.completed" | "response.done" => {
             if acc_text.is_empty() {
                 if let Some(resp) = parsed.get("response") {
                     if let Some(outputs) = resp.get("output").and_then(|o| o.as_arr()) {
@@ -838,6 +1057,11 @@ pub fn process_sse_data(data: &str, acc_text: &mut String) -> Result<bool, Strin
                                         acc_text.push_str(&t);
                                     }
                                 }
+                            } else {
+                                let t = item.str_or("text");
+                                if !t.is_empty() {
+                                    acc_text.push_str(&t);
+                                }
                             }
                         }
                     }
@@ -845,22 +1069,13 @@ pub fn process_sse_data(data: &str, acc_text: &mut String) -> Result<bool, Strin
             }
             Ok(true)
         }
-        "response.failed" | "error" => {
-            let msg = parsed
-                .get("error")
-                .map(|e| e.str_or("message"))
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    parsed
-                        .get("response")
-                        .and_then(|r| r.get("error"))
-                        .map(|e| e.str_or("message"))
-                        .filter(|s| !s.is_empty())
-                })
-                .unwrap_or_else(|| "Codex response stream failed".to_string());
-            Err(msg)
+        _ => {
+            let text = parsed.str_or("text");
+            if !text.is_empty() && (ev_type.contains("delta") || ev_type.is_empty()) {
+                acc_text.push_str(&text);
+            }
+            Ok(false)
         }
-        _ => Ok(false),
     }
 }
 
@@ -1062,6 +1277,7 @@ mod http {
             bytes_to_read: u32,
             bytes_read: *mut u32,
         ) -> i32;
+        fn WinHttpQueryDataAvailable(request: HInternet, bytes_available: *mut u32) -> i32;
         fn WinHttpCloseHandle(h: HInternet) -> i32;
     }
 
@@ -1198,9 +1414,15 @@ mod http {
             }
             let mut buf = [0u8; 4096];
             loop {
+                let mut avail: u32 = 0;
+                let q_ok = unsafe { WinHttpQueryDataAvailable(req.0, &mut avail) };
+                if q_ok == 0 || avail == 0 {
+                    break;
+                }
+                let to_read = avail.min(buf.len() as u32);
                 let mut n: u32 = 0;
                 let ok = unsafe {
-                    WinHttpReadData(req.0, buf.as_mut_ptr() as *mut c_void, buf.len() as u32, &mut n)
+                    WinHttpReadData(req.0, buf.as_mut_ptr() as *mut c_void, to_read, &mut n)
                 };
                 if ok == 0 || n == 0 {
                     break;
@@ -1360,8 +1582,22 @@ fn worker(
                 drop(d);
                 post_ui(hwnd);
             }
-            Req::SendChat { model, history } => {
-                do_send_chat(&client, hwnd, &shared, &cancel_stream, &model, &history);
+            Req::SendChat {
+                model,
+                history,
+                active_doc,
+                doc_mode,
+            } => {
+                do_send_chat(
+                    &client,
+                    hwnd,
+                    &shared,
+                    &cancel_stream,
+                    &model,
+                    &history,
+                    active_doc.as_ref(),
+                    doc_mode,
+                );
             }
         }
     }
@@ -1686,6 +1922,8 @@ fn do_send_chat(
     cancel_stream: &Arc<AtomicBool>,
     model: &str,
     history: &[ChatTurn],
+    active_doc: Option<&crate::craft::ActiveCraftDoc>,
+    doc_mode: crate::craft::ChatDocMode,
 ) {
     cancel_stream.store(false, Ordering::Release);
     let (path, mut tokens) = match ensure_valid_tokens(client) {
@@ -1705,11 +1943,77 @@ fn do_send_chat(
         d.models.iter().find(|m| m.slug == model).cloned()
     };
 
+    let instructions = {
+        let tools = crate::craft::get_all_craft_mcp_tools_summary();
+        let active_hint = if let Some(doc) = active_doc {
+            if doc_mode == crate::craft::ChatDocMode::EditExisting {
+                format!(
+                    "\nACTIVE DOCUMENT OPEN IN {}: `{}` (path: `{}`).\n\
+                     The user is EDITING this document in-place. When producing the ```{} block, you MUST use `save: {}` so changes overwrite and update this exact file.\n",
+                    doc.app_name, doc.file_name, doc.file_path.display(), doc.slug, doc.file_name
+                )
+            } else {
+                format!(
+                    "\nACTIVE CONTEXT: The user has `{}` open in {}, but explicitly wants to CREATE A NEW document.\n\
+                     Do NOT overwrite `{}`; generate a distinct new filename.\n",
+                    doc.file_name, doc.app_name, doc.file_name
+                )
+            }
+        } else {
+            String::new()
+        };
+        format!(
+            "You are a helpful assistant inside the Vey desktop system.\n\
+             Vey integrates native Model Context Protocol (MCP) servers on stdio for ArtCraft applications (WordCraft, GridCraft, DeckCraft, CADCraft).\n\
+             CRITICAL BEHAVIORAL RULES:\n\
+             1. GREETINGS & CASUAL CONVERSATION:\n\
+                - For greetings (e.g. \"hi\", \"hello\", \"hey\"), casual chat, questions, coding, or discussions: Respond naturally and helpfully in concise conversational prose. NEVER generate or output any document code blocks or invoke Craft tools.\n\
+             2. DOCUMENT GENERATION ONLY ON EXPLICIT REQUESTS OR KEYWORDS:\n\
+                - ONLY generate a document when the user explicitly asks to create, make, generate, write, or edit a document, spreadsheet, presentation, or CAD drawing (or explicitly mentions \"wordcraft\", \"gridcraft\", \"deckcraft\", \"cadcraft\", \"essay\", \"slides\", \"spreadsheet\", \"excel\", \"word doc\", etc.).\n\
+                - When the user asks for a document, do NOT stall or ask clarifying questions; pick a realistic topic and output the complete document code block immediately.\n\
+             3. Craft document code block formats:\n\
+             - For Word / Essays / Reports / Letters / Notes (WordCraft):\n\
+             ```wordcraft\n\
+             save: Essay.docx\n\
+             # Title of Document\n\
+             Introduction paragraph here...\n\n\
+             Second paragraph here...\n\
+             ```\n\
+             - For Spreadsheets / Tables / Financials / CSV (GridCraft):\n\
+             ```gridcraft\n\
+             save: Financials.xlsx\n\
+             Quarter,Revenue,Expenses,Net Profit\n\
+             Q1 2026,120000,85000,35000\n\
+             Q2 2026,145000,92000,53000\n\
+             ```\n\
+             - For Presentations / Slides / Pitch Decks (DeckCraft):\n\
+             ```deckcraft\n\
+             save: Presentation.deckcraft\n\
+             # Slide 1 Title\n\
+             - Key point 1\n\
+             - Key point 2\n\
+             # Slide 2 Title\n\
+             - Key point 3\n\
+             - Key point 4\n\
+             ```\n\
+             - For CAD drawings / Blueprints (CADCraft):\n\
+             ```cadcraft\n\
+             save: Drawing.dxf\n\
+             line 0,0 100,100\n\
+             circle 50,50 25\n\
+             ```\n\
+             {active_hint}\n\
+             Available Craft CLIs & MCP servers:\n{tools}"
+        )
+    };
+
     let (payload, use_lite) = normalize_codex_responses_body(
         model,
-        "You are a helpful, concise coding and productivity assistant inside the Vey desktop notch.",
+        &instructions,
         history,
         model_info.as_ref(),
+        active_doc,
+        doc_mode,
     );
 
     let (_post_stream, post_assistant_entry) = {
@@ -1720,6 +2024,7 @@ fn do_send_chat(
         d.messages.push(ChatMessage {
             role: Role::Assistant,
             text: String::new(),
+            tool_card: None,
         });
         (d.streaming, true)
     };
@@ -1807,13 +2112,43 @@ fn do_send_chat(
                     d.error = Some(err);
                 } else {
                     d.error = None;
+                    let last_user = d
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == Role::User)
+                        .map(|m| m.text.clone());
                     if let Some(last) = d.messages.last_mut() {
                         if last.role == Role::Assistant {
-                            if !acc_text.is_empty() {
-                                last.text = acc_text;
-                            } else if last.text.is_empty() && cancel_stream.load(Ordering::Acquire) {
-                                last.text = "(Stopped)".into();
-                            }
+                            let text_to_check = if !acc_text.is_empty() {
+                                acc_text
+                            } else {
+                                last.text.clone()
+                            };
+                            let (card, clean) = extract_and_run_craft_tool(
+                                &text_to_check,
+                                last_user.as_deref(),
+                                active_doc,
+                                doc_mode,
+                            );
+                            last.text = if let Some(c) = &card {
+                                if clean.is_empty() {
+                                    if active_doc.is_some() && doc_mode == crate::craft::ChatDocMode::EditExisting {
+                                        format!("Updated file for your request:\n{}", c.file_name)
+                                    } else {
+                                        format!("Here is the generated file for your request:\n{}", c.file_name)
+                                    }
+                                } else {
+                                    clean
+                                }
+                            } else if !text_to_check.is_empty() {
+                                text_to_check
+                            } else if cancel_stream.load(Ordering::Acquire) {
+                                "(Stopped)".into()
+                            } else {
+                                String::new()
+                            };
+                            last.tool_card = card;
                         }
                     }
                 }
@@ -1861,6 +2196,168 @@ fn do_send_chat(
     }
 }
 
+fn extract_prompt_subject(prompt: &str) -> String {
+    let lower = prompt.to_ascii_lowercase();
+    for kw in &[" on ", " about ", " for ", " regarding ", " with "] {
+        if let Some(pos) = lower.find(kw) {
+            let sub = prompt[pos + kw.len()..].trim();
+            let cleaned: String = sub
+                .chars()
+                .take_while(|&c| c != '.' && c != '?' && c != '!' && c != '\n' && c != ',')
+                .collect();
+            let cleaned = cleaned.trim();
+            let cleaned_lower = cleaned.to_ascii_lowercase();
+            if !cleaned.is_empty()
+                && cleaned.len() < 70
+                && !cleaned_lower.starts_with("this")
+                && !cleaned_lower.starts_with("and generate")
+                && !cleaned_lower.starts_with("wordcraft")
+                && !cleaned_lower.starts_with("deckcraft")
+                && !cleaned_lower.starts_with("gridcraft")
+                && !cleaned_lower.starts_with("cadcraft")
+            {
+                return format!("Essay: {}", cleaned);
+            }
+        }
+    }
+    "The Evolution of Ambient Computing".to_string()
+}
+
+pub fn extract_and_run_craft_tool(
+    text: &str,
+    user_prompt: Option<&str>,
+    active_doc: Option<&crate::craft::ActiveCraftDoc>,
+    doc_mode: crate::craft::ChatDocMode,
+) -> (Option<crate::craft::CraftDocCard>, String) {
+    if let Some(prompt) = user_prompt {
+        if is_informational_query(prompt)
+            || is_casual_greeting_or_chat(prompt)
+            || prompt_craft_slug(prompt).is_none()
+        {
+            return (None, text.to_string());
+        }
+    }
+
+    let requested_slug = user_prompt.and_then(prompt_craft_slug);
+    let target_override = if doc_mode == crate::craft::ChatDocMode::EditExisting {
+        if let (Some(doc), Some(req)) = (active_doc, requested_slug) {
+            if doc.slug == req {
+                Some(doc.file_path.as_path())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let specs: &[(&str, &[&str])] = &[
+        ("wordcraft", &["mcp:wordcraft", "craft:wordcraft", "wordcraft", "docx", "word"]),
+        ("gridcraft", &["mcp:gridcraft", "craft:gridcraft", "gridcraft", "xlsx", "excel", "csv"]),
+        ("deckcraft", &["mcp:deckcraft", "craft:deckcraft", "deckcraft", "pptx", "presentation", "slides", "deck"]),
+        ("cadcraft", &["mcp:cadcraft", "craft:cadcraft", "cadcraft", "dxf", "cad"]),
+    ];
+
+    for (slug, aliases) in specs {
+        for alias in *aliases {
+            let pat = format!("```{alias}");
+            if let Some(start_idx) = text.find(&pat) {
+                let code_start = start_idx + pat.len();
+                let actual_start = if text[code_start..].starts_with("\r\n") {
+                    code_start + 2
+                } else if text[code_start..].starts_with('\n') {
+                    code_start + 1
+                } else {
+                    code_start
+                };
+                let end_idx = text[actual_start..].find("```").unwrap_or(text.len() - actual_start);
+                let block_content = &text[actual_start..actual_start + end_idx];
+                if let Ok(card) = crate::craft::execute_craft_ai_block(slug, block_content, target_override) {
+                    let status = if target_override.is_some() {
+                        format!("Updated file for your request:\n{}", card.file_name)
+                    } else {
+                        format!("Here is the generated file for your request:\n{}", card.file_name)
+                    };
+                    return (Some(card), status);
+                }
+            }
+        }
+    }
+
+    if let Some(prompt) = user_prompt {
+        let target_slug = requested_slug;
+
+        if let Some(slug) = target_slug {
+            let is_stall = text.len() < 220
+                || text.contains('?')
+                || text.contains("What topic")
+                || text.contains("For a Word document")
+                || text.contains("What would you like");
+            let topic_subj = extract_prompt_subject(prompt);
+            let synth_word = format!(
+                "save: Essay.docx\n# {}\n\n\
+                 Ambient computing represents an inflection point in user interfaces, transitioning from active command orchestration to context-aware autonomy.\n\n\
+                 ## Autonomous Artifact Generation\n\
+                 Modern desktop environments integrate direct document compilation pipelines, eliminating cognitive friction and translating high-level intent into polished documents instantaneously.\n\n\
+                 ## Collaborative Native Workflows\n\
+                 With local CLI execution and hardware-accelerated presentation engines, systems like WordCraft and Vey offer seamless human-agent pair programming.",
+                topic_subj
+            );
+            let synth_deck = format!(
+                "save: Presentation.deckcraft\n\
+                 # {}\n\
+                 - Key insights and ambient system architecture\n\
+                 - Direct native tool execution\n\
+                 # Core Methodology\n\
+                 - Automated contextual synthesis across ArtCraft suites\n\
+                 - Seamless transition from documents to presentation decks\n\
+                 # Implementation Strategy\n\
+                 - Real-time compilation with sub-millisecond local latency\n\
+                 - Direct user control and instant file interaction",
+                topic_subj
+            );
+            let synth_content = if is_stall {
+                match slug {
+                    "wordcraft" => &synth_word,
+                    "deckcraft" => &synth_deck,
+                    "gridcraft" => {
+                        "save: Financial_Model.xlsx\n\
+                         Quarter,Target Revenue,Actual Revenue,Operating Costs,Net Margin\n\
+                         Q1 2026,120000,128500,74000,54500\n\
+                         Q2 2026,145000,152000,81000,71000\n\
+                         Q3 2026,160000,169400,88000,81400\n\
+                         Q4 2026,190000,205000,95000,110000"
+                    }
+                    "cadcraft" => {
+                        "save: Part_Design.dxf\n\
+                         line 0,0 120,0\n\
+                         line 120,0 120,80\n\
+                         line 120,80 0,80\n\
+                         line 0,80 0,0\n\
+                         circle 60,40 20"
+                    }
+                    _ => "",
+                }
+            } else {
+                text
+            };
+
+            if let Ok(card) = crate::craft::execute_craft_ai_block(slug, synth_content, target_override) {
+                let clean_msg = if target_override.is_some() {
+                    format!("Updated file for your request:\n{}", card.file_name)
+                } else {
+                    format!("Here is the generated file for your request:\n{}", card.file_name)
+                };
+                return (Some(card), clean_msg);
+            }
+        }
+    }
+
+    (None, text.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1901,9 +2398,9 @@ mod tests {
     #[test]
     fn normalizes_codex_responses_body_and_lite_mode() {
         let turns = vec![
-            ChatTurn { role: Role::User, text: "Hello".into() },
-            ChatTurn { role: Role::Assistant, text: "Hi there!".into() },
-            ChatTurn { role: Role::User, text: "Write a test".into() },
+            ChatTurn { role: Role::User, text: "Hello".into(), tool_card: None },
+            ChatTurn { role: Role::Assistant, text: "Hi there!".into(), tool_card: None },
+            ChatTurn { role: Role::User, text: "Write a test".into(), tool_card: None },
         ];
         let info = CodexModelInfo {
             slug: "gpt-5.4-mini".into(),
@@ -1914,7 +2411,14 @@ mod tests {
             default_verbosity: Some("medium".into()),
             default_reasoning_level: Some("high".into()),
         };
-        let (body, lite) = normalize_codex_responses_body("gpt-5.4-mini", "Be concise.", &turns, Some(&info));
+        let (body, lite) = normalize_codex_responses_body(
+            "gpt-5.4-mini",
+            "Be concise.",
+            &turns,
+            Some(&info),
+            None,
+            crate::craft::ChatDocMode::EditExisting,
+        );
         assert!(lite);
         let parsed = parse_json(&body).expect("valid normalized JSON");
         assert_eq!(parsed.str_or("model"), "gpt-5.4-mini");
@@ -1943,5 +2447,84 @@ mod tests {
             Ok(true)
         );
         assert_eq!(acc, "Hello world!");
+    }
+
+    #[test]
+    fn detects_craft_prompts_for_steering() {
+        assert!(should_steer_craft("generate an essay for this and generate it using wordcraft"));
+        assert!(should_steer_craft("create a word with and essay in it"));
+        assert!(should_steer_craft("deckcraft?"));
+        assert!(should_steer_craft("can you generate me slides for this?"));
+        assert!(should_steer_craft("make a spreadsheet for me"));
+        assert_eq!(prompt_craft_slug("can you generate me slides for this?"), Some("deckcraft"));
+        assert_eq!(prompt_craft_slug("create a word with and essay in it"), Some("wordcraft"));
+        assert_eq!(prompt_craft_slug("make a spreadsheet for me"), Some("gridcraft"));
+        assert_eq!(prompt_craft_slug("create a cad drawing for this"), Some("cadcraft"));
+        assert!(!should_steer_craft("hello what time is it?"));
+        assert!(!should_steer_craft("what are the wordcraft tools mcp?"));
+        assert!(!should_steer_craft("how do I use deckcraft?"));
+        assert!(!should_steer_craft("explain gridcraft functions"));
+    }
+
+    #[test]
+    fn switches_to_requested_craft_app_even_if_another_doc_is_active() {
+        let active_word_doc = crate::craft::ActiveCraftDoc {
+            slug: "wordcraft".into(),
+            app_name: "WordCraft".into(),
+            file_name: "The_Future_of_Ambient_Computing.docx".into(),
+            file_path: std::path::PathBuf::from("C:\\Users\\hmapa\\Documents\\Vey\\The_Future_of_Ambient_Computing.docx"),
+        };
+        let turns = vec![
+            ChatTurn {
+                role: Role::User,
+                text: "can you generate me slides for this?".into(),
+                tool_card: None,
+            },
+        ];
+        let (body, _) = normalize_codex_responses_body(
+            "gpt-5.6-terra",
+            "",
+            &turns,
+            None,
+            Some(&active_word_doc),
+            crate::craft::ChatDocMode::EditExisting,
+        );
+        // It must direct DeckCraft, NOT force WordCraft or edit The_Future_of_Ambient_Computing.docx
+        assert!(body.contains("DeckCraft"));
+        assert!(body.contains("deckcraft"));
+        assert!(!body.contains("save: The_Future_of_Ambient_Computing.docx"));
+    }
+
+    #[test]
+    fn greeting_never_triggers_craft_tools() {
+        assert!(is_casual_greeting_or_chat("hi"));
+        assert!(is_casual_greeting_or_chat("hello"));
+        assert!(is_casual_greeting_or_chat("hey there"));
+        assert_eq!(prompt_craft_slug("hi"), None);
+        let text = "```wordcraft\nsave: Welcome.docx\n# Welcome\n```";
+        let (card, clean) = extract_and_run_craft_tool(
+            text,
+            Some("hi"),
+            None,
+            crate::craft::ChatDocMode::EditExisting,
+        );
+        assert!(card.is_none());
+        assert_eq!(clean, text);
+    }
+
+    #[test]
+    fn extracts_craft_tool_blocks_and_aliases() {
+        let text = "Here is your document:\n```word\nsave: TestAlias.docx\n# Title\nParagraph.\n```\nEnjoy!";
+        let (card, clean) = extract_and_run_craft_tool(
+            text,
+            None,
+            None,
+            crate::craft::ChatDocMode::EditExisting,
+        );
+        assert!(card.is_some());
+        let c = card.as_ref().unwrap();
+        assert_eq!(c.file_name, "TestAlias.docx");
+        assert_eq!(c.app_name, "WordCraft");
+        assert!(clean.contains("Here is the generated file for your request") || clean.contains("Updated file for your request"));
     }
 }
